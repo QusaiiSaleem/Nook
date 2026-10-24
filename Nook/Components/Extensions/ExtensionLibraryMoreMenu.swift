@@ -80,6 +80,12 @@ struct MoreMenuView: View {
                     MoreMenuItem(icon: "bell.fill", iconColor: .red, label: "Notifications") {
                         SitePermissionPicker(permission: .notifications, host: host, settings: settings)
                     }
+
+                    if host.lowercased() == MessageArchivePolicy.host,
+                       let session = browserManager.tabs.selectedSession(in: windowState), !session.isPrivate,
+                       !session.isAgentPage, let spaceID = browserManager.tabs.spaceID(of: session.itemID) {
+                        LocalCopyMenuRows(browserManager: browserManager, session: session, spaceID: spaceID)
+                    }
                 }
 
                 // Nook-wide, not per site: WebKit exposes no per-origin delegate for location on
@@ -190,7 +196,7 @@ struct MoreMenuView: View {
 
 // MARK: - More Menu Item
 
-private struct MoreMenuItem<Trailing: View>: View {
+struct MoreMenuItem<Trailing: View>: View {
     let icon: String
     let iconColor: Color
     let label: String
@@ -237,7 +243,7 @@ extension MoreMenuItem where Trailing == EmptyView {
     }
 }
 
-/// Per-site allow/block/ask for the two capabilities WebKit lets us answer without prompting.
+/// Per-site allow/block/ask for camera, microphone and notifications.
 private struct SitePermissionPicker: View {
     let permission: SitePermission
     let host: String
