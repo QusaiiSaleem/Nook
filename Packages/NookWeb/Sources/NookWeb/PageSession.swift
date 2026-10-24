@@ -182,6 +182,8 @@ public final class PageSession: NSObject, Identifiable {
     @ObservationIgnored public var pendingContextMenuPayload: WebContextMenuPayload?
     /// Files MCP `upload` named for this agent page's next file picker.
     @ObservationIgnored public var pendingUploadURLs: [URL]?
+    /// Shown as an iPhone shows it (see `MobileView`); for this tab while it is open.
+    public internal(set) var isMobileView = false
 
     // MARK: - OAuth Flow State
 
@@ -398,7 +400,7 @@ public final class PageSession: NSObject, Identifiable {
         controller.add(self, contentWorld: Self.pipStateWorld, name: "pipStateChange")
         controller.removeScriptMessageHandler(forName: Self.translateHandlerName, contentWorld: Self.translateWorld)
         controller.add(self, contentWorld: Self.translateWorld, name: Self.translateHandlerName)
-        webView.customUserAgent = PlatformUserAgent.custom
+        webView.customUserAgent = userAgent
         // Let the web content control its own background so extension styles (like Dark
         // Reader) can paint dark backgrounds. The themed background shows only while loading.
         webView.setDrawsPageBackground(true)

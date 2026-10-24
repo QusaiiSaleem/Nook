@@ -714,7 +714,8 @@ struct TabCompositorWrapper: NSViewRepresentable {
             divider?.isHidden = true
             // Single tab (most common path during video playback)
             if let session = selected, !session.isUnloaded {
-                setSingleWebView(pageView(for: session, reusing: contentSubviews), in: containerView, replacing: contentSubviews)
+                setSingleWebView(pageView(for: session, reusing: contentSubviews), in: containerView, replacing: contentSubviews,
+                                 mobile: session.isMobileView)
             } else {
                 removeContentViews(contentSubviews)
             }
@@ -747,7 +748,8 @@ struct TabCompositorWrapper: NSViewRepresentable {
     /// Sets a single webview as the only content in the container without removing it
     /// if it's already the sole content subview. This prevents GPU video surface
     /// disconnection that causes black flashes during playback.
-    private func setSingleWebView(_ desired: NSView, in containerView: NSView, replacing contentSubviews: [NSView]) {
+    private func setSingleWebView(_ desired: NSView, in containerView: NSView, replacing contentSubviews: [NSView],
+                                  mobile: Bool = false) {
         let isAlreadyCorrect = contentSubviews.count == 1 && contentSubviews.first === desired
 
         if !isAlreadyCorrect {
@@ -761,8 +763,14 @@ struct TabCompositorWrapper: NSViewRepresentable {
             }
         }
 
-        desired.frame = containerView.bounds
-        desired.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+        if mobile {
+            // Phone-wide in the middle, staying centered as the window resizes (MobileView).
+            desired.frame = MobileView.frame(in: containerView.bounds)
+            desired.autoresizingMask = [.minXMargin, .maxXMargin, .height]
+        } else {
+            desired.frame = containerView.bounds
+            desired.autoresizingMask = [NSView.AutoresizingMask.width, NSView.AutoresizingMask.height]
+        }
         desired.isHidden = false
     }
 
