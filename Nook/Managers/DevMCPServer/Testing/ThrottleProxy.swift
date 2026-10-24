@@ -39,6 +39,7 @@ final class ThrottleProxy: @unchecked Sendable {
     private let up: Pacer
     private let down: Pacer
     private var tunnels: [ObjectIdentifier: Tunnel] = [:]
+    private var opened = 0
     private var started: CheckedContinuation<UInt16, Error>?
 
     init(profile: Profile) throws {
@@ -61,6 +62,10 @@ final class ThrottleProxy: @unchecked Sendable {
             }
         }
     }
+
+    /// Tunnels that reached their host. Zero after a load means nothing was throttled: WebKit
+    /// sends localhost and other local addresses straight past proxies.
+    var tunnelsOpened: Int { queue.sync { opened } }
 
     func stop() {
         queue.async {
@@ -133,6 +138,7 @@ final class ThrottleProxy: @unchecked Sendable {
             guard let self, let tunnel else { return }
             switch state {
             case .ready:
+                self.opened += 1
                 self.answer(tunnel, "HTTP/1.1 200 Connection Established\r\n\r\n", thenClose: false)
                 if !rest.isEmpty { self.forward(rest, on: tunnel.toUpstream, to: upstream, pacer: self.up) }
                 self.relay(from: tunnel.client, to: upstream, pipe: tunnel.toUpstream, pacer: self.up, tunnel)

@@ -143,9 +143,7 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
 
         let reportFile = outputFolder.appendingPathComponent("report.json")
         report.files.insert(reportFile.path, at: 0)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(report) { try? data.write(to: reportFile) }
+        report.write(to: reportFile)
         return report
     }
 
@@ -195,6 +193,8 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
                     width: nil, selector: selector, fix: "add a :focus-visible outline"))
             }
         }
+        // The pictures that follow show the page as loaded, not the last control the check reached.
+        _ = await evaluate(webView, "if (document.activeElement) { document.activeElement.blur(); } 'ok'")
         return findings
     }
 

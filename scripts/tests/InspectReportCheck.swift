@@ -36,6 +36,13 @@ struct InspectReportCheck {
         precondition(merged.count == 1, "merged into \(merged.count)")
         precondition(merged[0].message.contains("390, 820"), "widths missing: \(merged[0].message)")
 
+        // Two links that share a description, both at 390: one width, not "at 390, 390".
+        let twins = InspectReport.merge([
+            InspectFinding(severity: "warning", rule: "tap-target", message: "Tap target 28 × 19 px", width: 390, selector: "td > a", fix: nil),
+            InspectFinding(severity: "warning", rule: "tap-target", message: "Tap target 28 × 19 px", width: 390, selector: "td > a", fix: nil)
+        ])
+        precondition(twins.count == 1 && twins[0].width == 390 && !twins[0].message.contains("390, 390"), "twins: \(twins)")
+
         var noisy = report()
         noisy.errors = (1...25).map { "error \($0)" }
         let lines = noisy.markdown().components(separatedBy: "\n").filter { $0.hasPrefix("- error ") }

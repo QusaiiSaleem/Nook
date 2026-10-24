@@ -25,6 +25,9 @@ struct InspectRunnerCheck {
         <p><button id="normal">Normal button</button></p>
         <script>console.error('boom')</script>
         <script>requestAnimationFrame(() => { document.title = 'Runner fixture'; })</script>
+        <script>addEventListener('resize', () => {
+            if (!window.__logged) { window.__logged = true; console.warn('focused-at-resize ' + document.activeElement.tagName); }
+        })</script>
         </body></html>
         """
 
@@ -56,6 +59,8 @@ struct InspectRunnerCheck {
         let focus = report.findings.filter { $0.rule == "focus-visible" }
         precondition(focus.contains { $0.selector?.contains("quiet") == true }, "the outline-less link has no visible focus: \(report.findings)")
         precondition(!focus.contains { $0.selector?.contains("normal") == true }, "the default button focus ring was flagged")
+        // The focus check must not leave a focus ring in the pictures taken after it.
+        precondition(report.errors.contains { $0.contains("focused-at-resize BODY") }, "a control kept focus after the focus check: \(report.errors)")
         precondition(runner.screenshots.count == 5, "screenshots \(runner.screenshots.map(\.label))")
         precondition(runner.screenshots.allSatisfy { $0.jpeg.count > 1000 }, "empty screenshots")
         for name in ["report.json", "full-390.png", "full-1280.png", "top-1600.jpg", "dark-1280.jpg"] {

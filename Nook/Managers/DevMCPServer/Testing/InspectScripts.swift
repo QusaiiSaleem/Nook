@@ -212,7 +212,18 @@ enum InspectScripts {
             const style = getComputedStyle(el);
             if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) { return false; }
             const rect = el.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0;
+            return rect.width > 0 && rect.height > 0 && !screenReaderOnly(el);
+        }
+        // Hidden on purpose for screen readers (skip links, icon labels): clipped to nothing, or
+        // squeezed to 1 px with its overflow hidden, itself or through a parent. Not a defect.
+        function screenReaderOnly(el) {
+            for (let node = el; node && node !== document.body; node = node.parentElement) {
+                const style = getComputedStyle(node);
+                if (style.clip === 'rect(0px, 0px, 0px, 0px)' || style.clipPath === 'inset(50%)') { return true; }
+                const rect = node.getBoundingClientRect();
+                if ((rect.width <= 1 || rect.height <= 1) && style.overflow !== 'visible') { return true; }
+            }
+            return false;
         }
         function ownText(el) {
             let text = '';
@@ -225,16 +236,21 @@ enum InspectScripts {
         const doc = document.scrollingElement || document.documentElement;
         if (doc.scrollWidth > doc.clientWidth + 1) {
             add('error', 'overflow', null, 'Page is wider than the screen (' + doc.scrollWidth + ' px > ' + doc.clientWidth + ' px)', 'find the element that is too wide; see the following lines', true);
+            // A right-to-left page grows past its left edge, a left-to-right one past its right.
+            const rtl = getComputedStyle(document.body || document.documentElement).direction === 'rtl';
+            const past = (rect) => rtl ? rect.left < -1 : rect.right > doc.clientWidth + 1;
+            const inside = (rect) => rtl ? rect.right > 0 : rect.left < doc.clientWidth;
             let shown = 0;
             for (const el of all) {
                 if (shown >= 10) { break; }
                 const style = getComputedStyle(el);
                 if (style.position === 'fixed') { continue; }
                 const rect = el.getBoundingClientRect();
-                if (rect.width > 0 && (rect.right > doc.clientWidth + 1) && rect.left < doc.clientWidth && visible(el)) {
+                if (rect.width > 0 && past(rect) && inside(rect) && visible(el)) {
                     const parentRect = el.parentElement ? el.parentElement.getBoundingClientRect() : null;
-                    if (parentRect && parentRect.right > doc.clientWidth + 1 && el.parentElement !== document.body) { continue; }
-                    add('error', 'overflow', el, 'Reaches past the right edge (' + Math.round(rect.right) + ' px)', 'max-width: 100% or allow it to wrap', true);
+                    if (parentRect && past(parentRect) && el.parentElement !== document.body) { continue; }
+                    const edge = rtl ? 'Reaches past the left edge (' + Math.round(rect.left) + ' px)' : 'Reaches past the right edge (' + Math.round(rect.right) + ' px)';
+                    add('error', 'overflow', el, edge, 'max-width: 100% or allow it to wrap', true);
                     shown++;
                 }
             }

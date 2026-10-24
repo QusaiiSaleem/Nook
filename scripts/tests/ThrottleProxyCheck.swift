@@ -31,8 +31,11 @@ struct ThrottleProxyCheck {
         defer { proxy.stop() }
         precondition(ThrottleProxy.Profile.slow3g.bytesPerSecond == 50_000 && ThrottleProxy.Profile.slow3g.latency == 0.4)
         let payload = Data((0..<40_000).map { _ in UInt8.random(in: 0...255) })
+        precondition(proxy.tunnelsOpened == 0, "a tunnel counted before any request")
         let (echoed, took) = try await roundTrip(payload, proxy: port, echo: echo)
         precondition(echoed == payload, "the tunnel changed the bytes")
+        // inspect reports a throttle that carried nothing as not applied (WebKit sends localhost past proxies).
+        precondition(proxy.tunnelsOpened == 1, "tunnels counted: \(proxy.tunnelsOpened)")
         // 0.4 s delay + 40 KB at 50 KB/s.
         precondition(took >= 1.2, "slow3g round trip took only \(took) s")
         precondition(took < 5, "slow3g round trip took \(took) s")

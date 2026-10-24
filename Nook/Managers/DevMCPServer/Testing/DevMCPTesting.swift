@@ -123,7 +123,12 @@ enum DevMCPTesting {
             "\($0.rawValue) (\(Int($0.latency * 1000)) ms on each new connection, \($0.bytesPerSecond * 8 / 1000) kbit/s shared)"
         }
         let runner = InspectRunner(configuration: configuration, outputFolder: folder)
-        let report = await runner.run(url: target, dark: args["dark"] as? Bool ?? true, network: label)
+        var report = await runner.run(url: target, dark: args["dark"] as? Bool ?? true, network: label)
+        if let proxy, let label, proxy.tunnelsOpened == 0 {
+            report.network = "\(label), not applied"
+            report.unassessable.append("network: nothing went through the throttle; WebKit sends localhost and other local addresses straight past proxies, so slow-network results need a deployed copy")
+            if let file = report.files.first { report.write(to: URL(fileURLWithPath: file)) }
+        }
 
         var markdown = report.markdown()
         if !runner.screenshots.isEmpty {
@@ -195,8 +200,17 @@ enum DevMCPTesting {
     /// and folders (~/.ssh, ~/.aws, .env) and ~/Library (keychains, cookies, this server's token).
     /// Anyone holding the token could otherwise send them to a site of their choosing.
     private static func holdsSecrets(_ file: URL) -> Bool {
-        let library = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library").resolvingSymlinksInPath().path
-        return file.pathComponents.contains { $0.hasPrefix(".") } || file.path.hasPrefix(library + "/")
+        let path = comparable(file)
+        let library = comparable(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library")) + "/"
+        return path.split(separator: "/").contains { $0.hasPrefix(".") } || path.hasPrefix(library)
+    }
+
+    /// The path the disk itself reports, so ~/library, a symlink or the /System/Volumes/Data alias
+    /// cannot stand in for ~/Library; lowercased because the Mac's disk ignores case.
+    private static func comparable(_ url: URL) -> String {
+        var path = (try? url.resourceValues(forKeys: [.canonicalPathKey]).canonicalPath) ?? url.resolvingSymlinksInPath().path
+        if path.hasPrefix("/System/Volumes/Data/") { path.removeFirst("/System/Volumes/Data".count) }
+        return path.lowercased()
     }
 
     // MARK: - Recording

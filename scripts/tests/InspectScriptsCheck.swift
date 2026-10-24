@@ -38,7 +38,9 @@ struct InspectScriptsCheck {
         .just { text-align: justify; }
         .mono { font-family: Menlo, monospace; }
         .tiny { display: inline-block; width: 20px; height: 20px; }
+        .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; color: #bbb; }
         </style></head><body>
+        <a class="sr" id="skip" href="#wide">Skip to the main content of this page</a>
         <div class="wide" id="wide"></div>
         <p class="faint" id="faint">Faint text here</p>
         <img src="\(pixel)" id="noalt" width="10" height="10">
@@ -85,6 +87,7 @@ struct InspectScriptsCheck {
         defects_page_finds_each_rule()
         capture_records_console_and_failed_loads()
         clean_arabic_page_has_no_arabic_findings()
+        rtl_overflow_names_the_element()
         text_over_a_gradient_is_unassessable()
         big_pages_say_where_they_stopped()
         facts_and_speed_answer()
@@ -109,6 +112,9 @@ struct InspectScriptsCheck {
 
         let phone = audit(width: 390, phone: true)
         let phoneRules = Set(phone.findings.compactMap { $0["rule"] as? String })
+        // A skip link hidden for screen readers (1 px, clipped) is good practice, not a defect.
+        let onSkip = (desktop.findings + phone.findings).filter { ($0["selector"] as? String)?.contains("skip") == true || ($0["selector"] as? String)?.contains("a.sr") == true }
+        precondition(onSkip.isEmpty, "the screen-reader-only skip link was reported: \(onSkip)")
         precondition(phoneRules.contains("overflow"), "the 600px box overflows at 390; got \(phoneRules.sorted())")
         precondition(phoneRules.contains("tap-target"), "the 20px link is too small at 390")
         precondition(!phoneRules.contains("contrast"), "width-independent rules run once, at 1280")
@@ -127,6 +133,18 @@ struct InspectScriptsCheck {
         for rule in ["arabic-justify", "arabic-monospace", "arabic-ltr", "latin-leak", "overflow", "contrast", "control-name"] {
             precondition(!rules.contains(rule), "false alarm \(rule) on a correct Arabic page")
         }
+        resize(1280)
+    }
+
+    /// On a right-to-left page, overflow sticks out past the left edge; the element must still be named.
+    @MainActor static func rtl_overflow_names_the_element() {
+        load("""
+            <html lang="ar" dir="rtl"><head><meta name="viewport" content="width=device-width"></head>
+            <body style="margin: 0; font-family: -apple-system, sans-serif"><div id="wideRTL" style="width: 600px; height: 20px; background: #eee"></div>
+            <p>نص عربي قصير</p></body></html>
+            """)
+        let overflow = audit(width: 390, phone: true).findings.filter { $0["rule"] as? String == "overflow" }
+        precondition(overflow.contains { ($0["selector"] as? String)?.contains("wideRTL") == true }, "the box past the left edge was not named: \(overflow)")
         resize(1280)
     }
 

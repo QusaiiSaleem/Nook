@@ -48,13 +48,21 @@ struct InspectReport: Codable {
         }
         return order.compactMap { key in
             guard var first = groups[key]?.first, let group = groups[key] else { return nil }
-            let widths = group.compactMap(\.width).sorted()
+            // Two elements that share a description can report the same width.
+            let widths = Set(group.compactMap(\.width)).sorted()
             if widths.count > 1 {
                 first.width = nil
                 first.message += " (at \(widths.map(String.init).joined(separator: ", ")))"
             }
             return first
         }
+    }
+
+    /// Saves the report as JSON (report.json beside its pictures).
+    func write(to file: URL) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(self) { try? data.write(to: file) }
     }
 
     func markdown() -> String {
