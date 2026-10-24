@@ -84,7 +84,7 @@ public final class NookSettingsService {
         }
     }
 
-    /// Stored per-site answers for camera and microphone, keyed by `SitePermissionRecord.key(for:)`.
+    /// Stored per-site answers for camera, microphone and notifications, keyed by `SitePermissionRecord.key(for:)`.
     public var sitePermissions: [String: SitePermissionRecord] = [:] {
         didSet {
             if let data = try? JSONEncoder().encode(sitePermissions) {

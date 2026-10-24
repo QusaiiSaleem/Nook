@@ -10,13 +10,14 @@ import Foundation
 
 /// A capability a page can ask for and Nook can answer without prompting.
 ///
-/// Only camera and microphone are here. WebKit routes those through
-/// `requestMediaCaptureAuthorization`, so a stored answer can be applied. Geolocation and web
-/// notifications have no per-origin delegate on macOS, so there is nothing to store an answer
-/// for; those stay app-level and the menu says so rather than implying otherwise.
+/// WebKit routes camera and microphone through `requestMediaCaptureAuthorization`, so a stored
+/// answer can be applied. Web notifications have no WebKit delegate on macOS; Nook's own
+/// `Notification` shim (`WebNotificationScripts`) asks for them, so their answer is stored here
+/// too. Geolocation has neither and stays app-level.
 public enum SitePermission: String, Codable, CaseIterable, Sendable {
     case camera
     case microphone
+    case notifications
 }
 
 /// What to do when a site asks. `.ask` means prompt, which is WebKit's own behaviour.
