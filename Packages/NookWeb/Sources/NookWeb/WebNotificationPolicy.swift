@@ -50,6 +50,13 @@ public enum WebNotificationPolicy {
         }
     }
 
+    /// Whether a page keeps running with no window showing it: a favorite or pinned tab
+    /// (`isSynced`) of a secure site whose notifications the person allowed.
+    public static func keepsRunning(isSynced: Bool, url: URL?, stored: SitePermissionPolicy) -> Bool {
+        guard isSynced, let url, let scheme = url.scheme, let host = url.host else { return false }
+        return isSecure(scheme: scheme, host: host) && stored == .allow
+    }
+
     /// Whether a notification may reach macOS right now.
     public static func mayShow(stored: SitePermissionPolicy, isPrivateOrAgent: Bool) -> Bool {
         !isPrivateOrAgent && stored == .allow

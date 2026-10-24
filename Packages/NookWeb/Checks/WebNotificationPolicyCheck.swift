@@ -46,6 +46,16 @@ struct WebNotificationPolicyCheck {
         precondition(!WebNotificationPolicy.isSecure(scheme: "file", host: ""))
         precondition(!WebNotificationPolicy.isSecure(scheme: "https", host: ""))
 
+        // Which pages keep running with no window: favorites and pinned tabs of a secure site the
+        // person allowed. Everything else unloads as before.
+        let whatsapp = URL(string: "https://web.whatsapp.com/")
+        precondition(WebNotificationPolicy.keepsRunning(isSynced: true, url: whatsapp, stored: .allow))
+        precondition(!WebNotificationPolicy.keepsRunning(isSynced: false, url: whatsapp, stored: .allow), "a Today tab unloads")
+        precondition(!WebNotificationPolicy.keepsRunning(isSynced: true, url: whatsapp, stored: .ask))
+        precondition(!WebNotificationPolicy.keepsRunning(isSynced: true, url: whatsapp, stored: .block))
+        precondition(!WebNotificationPolicy.keepsRunning(isSynced: true, url: URL(string: "http://web.whatsapp.com/"), stored: .allow))
+        precondition(!WebNotificationPolicy.keepsRunning(isSynced: true, url: nil, stored: .allow))
+
         // Requests arriving while a prompt is open for the same site join it.
         var prompts = WebNotificationPrompts<Int>()
         precondition(prompts.add(1, for: "web.whatsapp.com"), "the first request opens a prompt")

@@ -176,7 +176,8 @@ class WebViewCoordinator {
                     } || tabs.privateWindows.contains { $0.id != windowId && $0.selectedItemID == itemID }
                     if stillShown {
                         tabs.refreshWindows(showing: itemID)
-                    } else {
+                    } else if !tabs.keepsRunningOffscreen(itemID) {
+                        // A favorite or pinned page whose site may notify keeps running offscreen.
                         session.unload()
                     }
                 } else {
