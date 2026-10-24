@@ -5,14 +5,22 @@
 # (project.pbxproj, Info.plist) stay exactly as upstream ships them, so pulling an
 # official release (git merge vX.Y.Z) never conflicts with our identity settings.
 #
-# Usage:  Fork/build.sh            -> Release build
-#         Fork/build.sh Debug      -> Debug build
+# Usage:  Fork/build.sh                -> Release build
+#         Fork/build.sh Debug          -> Debug build
+#         Fork/build.sh --install      -> Release build, then installed as /Applications/Nook.app
 # Output: ~/dev/nook/build/DerivedData/Build/Products/<Config>/Nook.app
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)"     # ~/dev/nook/source (this git checkout)
 OUT="$(cd "$SRC/.." && pwd)/build"          # ~/dev/nook/build  (outside git, never committed)
-CONFIG="${1:-Release}"
+CONFIG="Release"
+INSTALL=false
+for arg in "$@"; do
+  case "$arg" in
+    Debug|Release) CONFIG="$arg" ;;
+    --install) INSTALL=true ;;
+  esac
+done
 
 # --- Our identity -------------------------------------------------------------
 # A different app ID gives this copy its own data folder, settings and logins, so it
@@ -66,3 +74,21 @@ codesign --verify --deep --strict "$APP"
 echo "Built: $APP"
 echo "App ID: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
 echo "Update feed: $(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$PLIST") (automatic checks: $AUTO_CHECKS)"
+
+# --- Install --------------------------------------------------------------------
+# Replaces /Applications/Nook.app only when it is this fork (or absent), never another Nook.
+if $INSTALL; then
+  DEST="/Applications/Nook.app"
+  if [ -d "$DEST" ]; then
+    EXISTING="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$DEST/Contents/Info.plist" 2>/dev/null || true)"
+    if [ "$EXISTING" != "$BUNDLE_ID" ]; then
+      echo "Not installing: $DEST is '$EXISTING', not $BUNDLE_ID. Move it away first." >&2
+      exit 1
+    fi
+    osascript -e "quit app id \"$BUNDLE_ID\"" 2>/dev/null || true
+    rm -rf "$DEST"
+  fi
+  # ditto keeps the signature seal; a local build has no quarantine flag, so Gatekeeper allows it.
+  ditto "$APP" "$DEST"
+  echo "Installed: $DEST"
+fi

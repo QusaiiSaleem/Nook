@@ -1,0 +1,60 @@
+{
+  "urls": [
+    "https://en.wikipedia.org/wiki/Web_browser",
+    "https://www.youtube.com/",
+    "https://github.com/nook-browser/Nook",
+    "https://www.bbc.com/news",
+    "https://www.apple.com/",
+    "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+    "https://www.reddit.com/r/apple/",
+    "https://www.theverge.com/",
+    "https://stackoverflow.com/questions",
+    "https://www.aljazeera.net/"
+  ],
+  "settle_s": 60,
+  "idle_s": 120,
+  "Arc": {
+    "load_seconds": 47.1,
+    "memory_added_mb": 2933.1,
+    "processes_added": 43,
+    "cpu_s_to_load_and_settle": 64.0,
+    "energy_j_to_load_and_settle": 33.0,
+    "idle_cpu_s_new_processes": 4.33,
+    "idle_energy_j_new_processes": 0.74,
+    "idle_cpu_s_whole_browser": 12.88,
+    "before": {
+      "footprint_mb": 4002.5,
+      "cpu_s": 44620.09,
+      "energy_j": 13875.2,
+      "processes": 24
+    },
+    "after": {
+      "footprint_mb": 6935.6,
+      "cpu_s": 44684.1,
+      "energy_j": 13908.2,
+      "processes": 67
+    }
+  },
+  "Nook": {
+    "load_seconds": 57.7,
+    "memory_added_mb": 2432.0,
+    "processes_added": 10,
+    "cpu_s_to_load_and_settle": 62.1,
+    "energy_j_to_load_and_settle": 33.4,
+    "idle_cpu_s_new_processes": 18.13,
+    "idle_energy_j_new_processes": 3.49,
+    "idle_cpu_s_whole_browser": 20.89,
+    "before": {
+      "footprint_mb": 227.4,
+      "cpu_s": 76.02,
+      "energy_j": 33.56,
+      "processes": 9
+    },
+    "after": {
+      "footprint_mb": 2659.4,
+      "cpu_s": 138.15,
+      "energy_j": 66.96,
+      "processes": 19
+    }
+  }
+}
