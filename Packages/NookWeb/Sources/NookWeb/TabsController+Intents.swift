@@ -188,6 +188,10 @@ extension TabsController {
         let owner = owner(of: window)
         let source = tree(owner)
         guard let item = source.item(itemID) else { return }
+        if item.isSplit {
+            if let tab = focusedTab(ofSplit: itemID, in: source) { select(tab, in: window, leaving: previous) }
+            return
+        }
         if item.isFolder {
             toggleFolder(itemID)
             return
@@ -205,6 +209,7 @@ extension TabsController {
         if movedSpace { sessionDelegate?.windowSpaceChanged(window) }
         window.selectedItemBySpace[spaceID] = itemID
         window.emptiedSpaces.remove(spaceID)
+        pairWindowWithSplit(itemID, in: window, source: source)
         // The latest window to select a page takes its live view; others show a placeholder.
         takeControl(itemID, in: window)
         var recent = window.recentItemsBySpace[spaceID, default: []]

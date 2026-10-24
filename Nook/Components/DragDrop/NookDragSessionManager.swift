@@ -248,6 +248,7 @@ final class NookDragSessionManager: ObservableObject {
     func cursorExitedZone(_ zone: DropZoneID) {
         guard isDragging, activeZone == zone else { return }
         activeZone = nil
+        resetSplitHold()
         if dropPosition?.zone == zone {
             dropPosition = nil
             dropDepth = 0
@@ -256,7 +257,17 @@ final class NookDragSessionManager: ObservableObject {
 
     func updateDropPosition(for zone: DropZoneID, layout: DropLayout, localPoint: CGPoint, zoneWidth: CGFloat) {
         guard isDragging else { return }
-        let position = Self.position(in: zone, layout: layout, point: localPoint, width: zoneWidth)
+        let position = resolvedPosition(in: zone, layout: layout, point: localPoint, width: zoneWidth)
+        holdCheck?.cancel()
+        if let hold = tabHold, position.placement != .into {
+            // The pointer may now stay still, so look again once the hold is long enough.
+            let wait = max(0, Self.splitArmDelay - Date().timeIntervalSince(hold.since)) + 0.02
+            holdCheck = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(wait))
+                guard !Task.isCancelled else { return }
+                self?.updateDropPosition(for: zone, layout: layout, localPoint: localPoint, zoneWidth: zoneWidth)
+            }
+        }
         if position != dropPosition {
             dropPosition = position
             dropDepth = Self.depth(of: position, layout: layout)
@@ -264,8 +275,46 @@ final class NookDragSessionManager: ObservableObject {
         }
     }
 
-    /// Maps a point (top-left origin, zone-local) to a drop position.
-    static func position(in zone: DropZoneID, layout: DropLayout, point: CGPoint, width: CGFloat) -> DropPosition {
+    // MARK: - Split by Holding Over a Tab
+
+    /// How long the pointer rests over a tab row's middle before a drop there makes a split.
+    static let splitArmDelay: TimeInterval = 0.35
+    /// The tab row the pointer rests over the middle of, and since when.
+    private var tabHold: (zone: DropZoneID, index: Int, since: Date)?
+    private var holdCheck: Task<Void, Never>?
+
+    /// The drop position, with a tab row armed (`.into`, which drops as a split) once the pointer
+    /// has rested over its middle third for `splitArmDelay`. A quick drag keeps the halves.
+    func resolvedPosition(in zone: DropZoneID, layout: DropLayout, point: CGPoint, width: CGFloat) -> DropPosition {
+        guard case .rows(let rows) = layout, let index = Self.middleTabRow(rows: rows, point: point),
+              rows[index].item.id != draggedItem?.tabId else {
+            resetSplitHold()
+            return Self.position(in: zone, layout: layout, point: point, width: width)
+        }
+        if tabHold?.zone != zone || tabHold?.index != index { tabHold = (zone, index, Date()) }
+        let armed = tabHold.map { Date().timeIntervalSince($0.since) >= Self.splitArmDelay } ?? false
+        return Self.position(in: zone, layout: layout, point: point, width: width, armedTab: armed ? index : nil)
+    }
+
+    /// The tab row (not a folder or split) whose middle third is under `point`.
+    static func middleTabRow(rows: [Row], point: CGPoint) -> Int? {
+        let step = NookDesign.Size.row + NookDesign.Spacing.rowGap
+        guard point.y >= 0, point.y < CGFloat(rows.count) * step else { return nil }
+        let index = Int(point.y / step)
+        let fraction = (point.y - CGFloat(index) * step) / NookDesign.Size.row
+        guard !rows[index].item.isFolder, fraction >= 1.0 / 3, fraction <= 2.0 / 3 else { return nil }
+        return index
+    }
+
+    private func resetSplitHold() {
+        tabHold = nil
+        holdCheck?.cancel()
+        holdCheck = nil
+    }
+
+    /// Maps a point (top-left origin, zone-local) to a drop position. `armedTab` is a tab row
+    /// whose middle drops as a split.
+    static func position(in zone: DropZoneID, layout: DropLayout, point: CGPoint, width: CGFloat, armedTab: Int? = nil) -> DropPosition {
         switch layout {
         case .none:
             return DropPosition(zone: zone, index: 0, placement: .before)
@@ -284,8 +333,10 @@ final class NookDragSessionManager: ObservableObject {
             let index = max(0, Int(point.y / step))
             let fraction = (point.y - CGFloat(index) * step) / NookDesign.Size.row
             let placement: DropPosition.Placement
-            if rows[index].item.isFolder {
+            if rows[index].item.isFolder, !rows[index].item.isSplit {
                 placement = fraction < 1.0 / 3 ? .before : (fraction > 2.0 / 3 ? .after : .into)
+            } else if index == armedTab, fraction >= 1.0 / 3, fraction <= 2.0 / 3 {
+                placement = .into
             } else {
                 placement = fraction < 0.5 ? .before : .after
             }
@@ -316,6 +367,7 @@ final class NookDragSessionManager: ObservableObject {
     }
 
     func clearDrag() {
+        resetSplitHold()
         draggedItem = nil
         draggedIcon = nil
         sourceZone = nil

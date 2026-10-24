@@ -45,9 +45,9 @@ def load_arc():
                 tab = data["tab"] or {}
                 out.append((path, tab.get("savedURL", ""), it.get("title") or tab.get("savedTitle") or ""))
             elif "splitView" in data:
-                # Nook has no saved split yet: its tabs should sit side by side, in place.
+                # A split's tabs sit at the split's place; the pair itself is checked separately.
                 kids = [items.get(k, {}) for k in it.get("childrenIds", [])]
-                splits.append(" | ".join((k.get("title") or (k.get("data", {}).get("tab") or {}).get("savedTitle") or "?") for k in kids))
+                splits.append(tuple(norm((k.get("data", {}).get("tab") or {}).get("savedURL", "")) for k in kids))
                 walk(child, path, out, splits)
             else:  # list = folder
                 walk(child, path + (it.get("title") or "",), out, splits)
@@ -80,21 +80,28 @@ def load_nook():
     for kids in children.values():
         kids.sort(key=lambda i: i["order"])
 
-    def walk(key, path, out):
+    def walk(key, path, out, splits):
         for it in children.get(key, []):
             if "tab" in it["kind"]:
                 tab = it["kind"]["tab"]
                 out.append((path, tab.get("url", ""), it.get("customTitle") or tab.get("pageTitle") or ""))
-                walk(("folder", it["id"]), path, out)  # trails: tabs opened from this tab
+                walk(("folder", it["id"]), path, out, splits)  # trails: tabs opened from this tab
+            elif it.get("split") is not None:
+                # A saved split is not a folder level: its two tabs sit at its place.
+                kids = children.get(("folder", it["id"]), [])
+                splits.append(tuple(norm(k["kind"].get("tab", {}).get("url", "")) for k in kids))
+                walk(("folder", it["id"]), path, out, splits)
             else:
-                walk(("folder", it["id"]), path + (it.get("customTitle") or "",), out)
+                walk(("folder", it["id"]), path + (it.get("customTitle") or "",), out, splits)
 
     result = []
-    for s in sorted((s for s in structure["spaces"] if not s.get("deletedAt")), key=lambda s: s["order"]):
-        entry = {"name": s["name"], "sections": {}}
+    # The Agent space (DevMCP's, marked in its icon) is Nook's own, not an imported one.
+    spaces = (s for s in structure["spaces"] if not s.get("deletedAt") and not str(s.get("icon", "")).startswith("nook.agent:"))
+    for s in sorted(spaces, key=lambda s: s["order"]):
+        entry = {"name": s["name"], "sections": {}, "splits": []}
         for section in ("favorites", "pinned", "tabs"):
             out = []
-            walk((section, s["id"]), (), out)
+            walk((section, s["id"]), (), out, entry["splits"])
             entry["sections"][section] = out
         result.append(entry)
     return result
@@ -150,7 +157,11 @@ def main():
             print(f"  {sec:9} {ok}/{len(entries)} in place" + ("" if in_order else "   ✗ ORDER differs"))
             problems += 0 if in_order else 1
         for pair in a["splits"]:
-            print(f"  · split view (re-split by hand until saved splits exist): {pair}")
+            if pair in n["splits"]:
+                print(f"  ✓ split      {' | '.join(pair)}")
+            else:
+                print(f"  ✗ split lost {' | '.join(pair)}")
+                problems += 1
 
     print(f"\n{'ALL MATCH ✓' if problems == 0 else f'{problems} problem(s)'}")
     return 0 if problems == 0 else 1

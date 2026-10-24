@@ -42,10 +42,16 @@ public struct TabContextMenu: View {
         if let item = tabs.item(itemID) {
             let section = tabs.section(of: itemID)
             Group {
-                if let windowState, let split = windowState.split,
-                   split.leftItemID == itemID || split.rightItemID == itemID {
+                // A window's split, or a saved split (shown in this window or not).
+                let shown = windowState?.split.map { $0.leftItemID == itemID || $0.rightItemID == itemID } ?? false
+                let savedSplit = tabs.split(holding: itemID)
+                if shown || savedSplit != nil {
                     Button {
-                        actions?.separateSplit(in: windowState)
+                        if shown, let windowState {
+                            actions?.separateSplit(in: windowState)
+                        } else if let savedSplit {
+                            tabs.separateSplit(savedSplit.id)
+                        }
                     } label: {
                         Label("Separate Tabs", systemImage: "rectangle.split.2x1.slash")
                     }

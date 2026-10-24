@@ -56,8 +56,19 @@ extension BrowserManager {
                 guard let id = tabs.createFolder(title: title, in: parent, after: previous) else { continue }
                 importArcNodes(children, into: .folder(itemID: id), after: nil)
                 previous = id
-            case .split(let halves):
-                previous = importArcNodes(halves, into: parent, after: previous) ?? previous
+            case .split(let halves, let fraction, let focusRight, let vertical):
+                // Two tabs side by side become a saved split; any other shape stays as tabs in place.
+                let twoTabs = halves.count == 2 && halves.allSatisfy { if case .tab = $0 { true } else { false } }
+                let inFavorites = if case .favorites = parent { true } else { false }
+                if twoTabs, !vertical, !inFavorites,
+                   let splitID = tabs.createSplit(in: parent, after: previous, info: SplitInfo(fraction: fraction ?? 0.5, focusRight: focusRight)) {
+                    importArcNodes(halves, into: .folder(itemID: splitID), after: nil)
+                    // A tab that would not import leaves its partner as a plain tab.
+                    if tabs.splitTabs(splitID) == nil { tabs.separateSplit(splitID) }
+                    previous = splitID
+                } else {
+                    previous = importArcNodes(halves, into: parent, after: previous) ?? previous
+                }
             }
         }
         return previous

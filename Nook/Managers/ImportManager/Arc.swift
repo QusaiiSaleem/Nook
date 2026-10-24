@@ -33,8 +33,9 @@ indirect enum ArcNode {
     /// `customTitle` is set only when the tab was renamed in Arc.
     case tab(url: String, pageTitle: String, customTitle: String?)
     case folder(title: String, children: [ArcNode])
-    /// Tabs Arc shows side by side.
-    case split([ArcNode])
+    /// Tabs Arc shows side by side: the left one's share of the width, whether the right one
+    /// was in use, and whether Arc stacked them top to bottom instead.
+    case split([ArcNode], fraction: Double?, focusRight: Bool, vertical: Bool)
 }
 
 // MARK: - Parser
@@ -100,7 +101,19 @@ private struct ArcTree {
         }
         if data["splitView"] != nil {
             let halves = nodes(in: id)
-            return halves.isEmpty ? nil : .split(halves)
+            guard !halves.isEmpty else { return nil }
+            let layout = data["splitView"] as? [String: Any]
+            let children = item["childrenIds"] as? [String] ?? []
+            var widths: [String: Double] = [:]
+            for (child, width) in pairs(layout?["itemWidthFactors"]) {
+                if let child = child as? String, let width = width as? Double { widths[child] = width }
+            }
+            return .split(
+                halves,
+                fraction: children.first.flatMap { widths[$0] },
+                focusRight: children.count > 1 && layout?["focusItemID"] as? String == children[1],
+                vertical: layout?["layoutOrientation"] as? String == "vertical"
+            )
         }
         if data["list"] != nil {
             return .folder(title: title ?? "", children: nodes(in: id))

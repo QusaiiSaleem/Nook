@@ -79,6 +79,26 @@ final class SplitViewManager: ObservableObject {
     /// selected; inside a split it replaces that pane and becomes the selection.
     func enterSplit(with itemID: UUID, placeOn side: Side = .right, in window: BrowserWindowState) {
         guard let tabs = browserManager?.tabs, tabs.item(itemID) != nil else { return }
+        // A saved split: replacing a pane swaps the tab inside it, and a new pair becomes one.
+        // The window keeps its last pair while it shows another tab, so only a pair on screen
+        // has panes to replace.
+        let showsSplit = window.split.map { [$0.leftItemID, $0.rightItemID].contains(window.selectedItemID) } ?? false
+        if showsSplit, let split = window.split, let saved = tabs.split(holding: split.leftItemID) {
+            let old = side == .left ? split.leftItemID : split.rightItemID
+            if old != itemID, tabs.replaceInSplit(saved.id, replacing: old, with: itemID) {
+                tabs.select(itemID, in: window)
+                loadPanes(of: window)
+                return
+            }
+        } else if !showsSplit, let current = window.selectedItemID, current != itemID {
+            let (left, right) = side == .left ? (itemID, current) : (current, itemID)
+            if tabs.makeSplit(left: left, right: right, at: current) != nil {
+                tabs.select(current, in: window)
+                loadPanes(of: window)
+                return
+            }
+        }
+        // A favorite in the pair: a split of this window only, as before saved splits.
         if var split = window.split {
             switch side {
             case .left: split.leftItemID = itemID
@@ -127,7 +147,30 @@ final class SplitViewManager: ObservableObject {
 
     /// Ends the split and keeps both tabs open. The active pane stays selected.
     func separate(in window: BrowserWindowState) {
-        exitSplit(keep: activeSide(for: window.id) ?? .left, for: window.id)
+        let keep = activeSide(for: window.id) ?? .left
+        if let split = window.split, let tabs = browserManager?.tabs, let saved = tabs.split(holding: split.leftItemID) {
+            tabs.separateSplit(saved.id)
+        }
+        exitSplit(keep: keep, for: window.id)
+    }
+
+    // MARK: - Divider
+
+    /// Moves the divider of the window's split to `fraction` of the width (each pane keeps at
+    /// least `SplitInfo.minFraction`). `persist` stores it: on the saved split, or the window record.
+    func setDividerFraction(_ fraction: Double, for windowId: UUID, persist: Bool) {
+        guard let window = window(windowId), var split = window.split, let tabs = browserManager?.tabs else { return }
+        split.fraction = SplitInfo(fraction: fraction).clamped().fraction
+        if split != window.split {
+            window.split = split
+            window.refreshCompositor()
+        }
+        guard persist else { return }
+        if let saved = tabs.split(holding: split.leftItemID) {
+            tabs.setSplitLayout(saved.id, fraction: split.fraction)
+        } else {
+            tabs.mirror(window)
+        }
     }
 
     func cleanupWindow(_ windowId: UUID) {

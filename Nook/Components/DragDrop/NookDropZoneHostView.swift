@@ -56,7 +56,7 @@ class NookDropZoneNSView: NSView {
         let point = flippedPoint(sender)
         let width = bounds.width
         MainActor.assumeIsolated {
-            let position = NookDragSessionManager.position(in: coordinator.zoneID, layout: coordinator.layout, point: point, width: width)
+            let position = coordinator.manager.resolvedPosition(in: coordinator.zoneID, layout: coordinator.layout, point: point, width: width)
             coordinator.manager.hapticFeedback(.generic)
             var transaction = Transaction()
             transaction.disablesAnimations = true

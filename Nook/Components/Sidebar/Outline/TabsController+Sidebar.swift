@@ -27,7 +27,15 @@ extension TabsController {
         guard row.item.id != itemID else { return }
         switch position.placement {
         case .into:
-            drop(itemID, section: section, rows: rows, index: index, intoFolder: true)
+            if !row.item.isFolder {
+                // A held drop on a tab: the two become a split where that tab is. A folder or a
+                // favorite cannot join one, so it lands before the tab instead.
+                if makeSplit(left: row.item.id, right: itemID, at: row.item.id) == nil {
+                    drop(itemID, section: section, rows: rows, index: index, intoFolder: false)
+                }
+            } else if !row.item.isSplit {
+                drop(itemID, section: section, rows: rows, index: index, intoFolder: true)
+            }
         case .before:
             drop(itemID, section: section, rows: rows, index: index, intoFolder: false)
         case .after:

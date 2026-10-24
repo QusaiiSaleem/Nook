@@ -664,7 +664,8 @@ struct TabCompositorWrapper: NSViewRepresentable {
         // Identify overlay (always preserved)
         let overlay = containerView.subviews.compactMap { $0 as? SplitDropCaptureView }.first
         // Content subviews = everything except the overlay
-        let contentSubviews = containerView.subviews.filter { !($0 is SplitDropCaptureView) }
+        let contentSubviews = containerView.subviews.filter { !($0 is SplitDropCaptureView) && !($0 is SplitDividerView) }
+        let divider = containerView.subviews.compactMap { $0 as? SplitDividerView }.first
 
         // A drag preview leaves the panes alone; the drop cards draw over them.
         let currentId = selected?.itemID
@@ -700,7 +701,17 @@ struct TabCompositorWrapper: NSViewRepresentable {
                 pane.frame = rect
                 pane.show(pageView(for: session, reusing: pane.content.subviews))
             }
+
+            // The gap between the panes resizes them.
+            let handle = divider ?? SplitDividerView(frame: .zero)
+            if handle.superview !== containerView { containerView.addSubview(handle) }
+            handle.splitManager = split
+            handle.windowId = windowState.id
+            handle.frame = NSRect(x: total.minX + leftWidth - gap / 2, y: total.minY, width: gap, height: total.height)
+            handle.isHidden = false
+            containerView.window?.invalidateCursorRects(for: handle)
         } else {
+            divider?.isHidden = true
             // Single tab (most common path during video playback)
             if let session = selected, !session.isUnloaded {
                 setSingleWebView(pageView(for: session, reusing: contentSubviews), in: containerView, replacing: contentSubviews)

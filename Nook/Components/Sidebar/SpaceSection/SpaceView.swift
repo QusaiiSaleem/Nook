@@ -164,6 +164,8 @@ struct SpaceView: View {
     private func rowView(_ row: Row, zone: DropZoneID, split: SplitPair?, isDropTarget: Bool) -> some View {
         if let split, row.id == split.anchorID {
             SplitTabRow(left: split.left, right: split.right, zoneID: zone)
+        } else if row.item.isSplit {
+            SavedSplitRow(split: row.item, zoneID: zone)
         } else {
             let session = tabs.session(for: row.item.id)
             NookDragSourceView(
@@ -179,6 +181,15 @@ struct SpaceView: View {
                 }
             }
             .opacity(dragSession.draggedItem?.tabId == row.item.id ? NookDesign.Surface.unloadedOpacity : 1)
+            // A tab row armed by a held drag: dropping makes the two a split.
+            .overlay {
+                if isDropTarget, !row.item.isFolder {
+                    NookDesign.Radius.shape(NookDesign.Radius.md)
+                        .strokeBorder(NookDesign.Surface.dropBorderActive, lineWidth: 1)
+                        .background(NookDesign.Radius.shape(NookDesign.Radius.md).fill(NookDesign.Surface.fillPressed))
+                        .allowsHitTesting(false)
+                }
+            }
             .id(row.item.id)
         }
     }
@@ -197,7 +208,8 @@ struct SpaceView: View {
     /// The window's split pair, anchored at the left tab's row, or the right tab's when the left
     /// has no visible row (a favorite, or inside a closed folder).
     private func splitPair(in rows: [Row]) -> SplitPair? {
-        guard let split = windowState.split,
+        // A saved split draws its own row (`SavedSplitRow`).
+        guard let split = windowState.split, tabs.split(holding: split.leftItemID) == nil,
               let left = tabs.item(split.leftItemID), let right = tabs.item(split.rightItemID),
               let anchor = [left.id, right.id].first(where: { id in rows.contains { $0.id == id } })
         else { return nil }
