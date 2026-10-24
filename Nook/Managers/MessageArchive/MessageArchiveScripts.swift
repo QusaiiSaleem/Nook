@@ -23,11 +23,16 @@ enum MessageArchiveScripts {
         WKUserScript(source: relaySource, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: relayWorld)
     }
 
-    /// The vendored WA-JS from the app bundle, or nil when it is missing.
-    static var waJSSource: String? {
-        Bundle.main.url(forResource: "wppconnect-wa", withExtension: "js")
-            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
-    }
+    /// Run in the same evaluation as WA-JS, before it: WA-JS reports to Google Analytics from
+    /// inside WhatsApp (a lasting client id, the page address and title) unless told not to.
+    static let waJSPrelude = """
+    // Nook WA-JS Config
+    window.WPPConfig = Object.assign({}, window.WPPConfig, { disableGoogleAnalytics: true });
+    """
+
+    /// The vendored WA-JS from the app bundle, read once, or nil when it is missing.
+    static let waJSSource: String? = Bundle.main.url(forResource: "wppconnect-wa", withExtension: "js")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
 
     static let captureSource = """
     // Nook WhatsApp Capture
@@ -36,12 +41,22 @@ enum MessageArchiveScripts {
         Object.defineProperty(window, '__nookWhatsAppCapture', { value: true });
 
         const BATCH = 200;
+        const PAGE = 500;
         const CHUNK = 512 * 1024;
+        // A larger file, held whole in the page while it downloads, risks the page's memory.
+        const MAX_MEDIA = 100 * 1024 * 1024;
+        // Older media may be gone from WhatsApp's servers, and fetching it may ask the sender's
+        // phone to upload it again; held back until that is confirmed harmless.
+        const OLD_MEDIA = 30 * 86400;
+        const READY_TIMEOUT = 120000;
         const MEDIA_KINDS = new Set(['image', 'video', 'ptt', 'audio', 'document', 'sticker']);
         const waiting = new Map();
         const queue = [];
+        const queued = new Set();
         let nextRequest = 1;
         let downloading = false;
+        let backfilling = false;
+        let started = false;
         let stopped = false;
 
         function send(kind, payload) {
@@ -50,6 +65,10 @@ enum MessageArchiveScripts {
                 const rid = nextRequest++;
                 waiting.set(rid, resolve);
                 window.postMessage(Object.assign({ __nookMA: kind, rid: rid }, payload), '*');
+            }).then(function (reply) {
+                // The Space's copy was turned off: stop reading, not just saving.
+                if (reply && reply.stop) { stopped = true; }
+                return reply;
             });
         }
 
@@ -83,14 +102,31 @@ enum MessageArchiveScripts {
             } catch (e) { return ''; }
         }
 
+        function vcards(m) {
+            return Array.isArray(m.vcardList) ? m.vcardList.map(function (v) { return v && v.vcard; }).filter(Boolean).join('\\n') : null;
+        }
+
+        // A media message's body is its thumbnail; each kind keeps its words somewhere else.
+        function textOf(m, kind) {
+            switch (kind) {
+            case 'chat': return m.body;
+            case 'vcard': return m.body || vcards(m);
+            case 'multi_vcard': return vcards(m);
+            case 'location':
+                return [m.loc, m.lat != null && m.lng != null ? m.lat + ',' + m.lng : null].filter(Boolean).join(' ') || null;
+            case 'poll_creation':
+                return [m.pollName].concat((m.pollOptions || []).map(function (o) { return o && o.name; })).filter(Boolean).join('\\n') || null;
+            default: return m.caption;
+            }
+        }
+
         function record(m) {
             const id = sid(m && m.id);
             if (!id) { return null; }
             const chatID = sid(m.id.remote) || sid(m.from) || '';
             if (chatID === 'status@broadcast') { return null; }
             const kind = String(m.type || 'unknown');
-            // A media message's body is its thumbnail; the caption is the text.
-            const text = kind === 'chat' ? m.body : m.caption;
+            const text = textOf(m, kind);
             const sender = m.senderObj || {};
             const ts = Number(m.t) || 0;
             const duration = Number(m.ephemeralDuration) || 0;
@@ -106,11 +142,14 @@ enum MessageArchiveScripts {
                 edited: !!m.latestEditMsgKey, viewOnce: !!m.isViewOnce,
                 links: text ? (String(text).match(/https?:[/][/][^\\s]+/g) || []).slice(0, 20) : [],
                 expiresAt: duration > 0 ? (Number(m.ephemeralStartTimestamp) || ts) + duration : null,
-                hasMedia: MEDIA_KINDS.has(kind) && !!m.mediaData
+                size: Number(m.size || (m.mediaData && m.mediaData.size)) || null,
+                // By kind: models built for old messages may lack mediaData; a failed fetch is recorded.
+                hasMedia: MEDIA_KINDS.has(kind)
             };
         }
 
-        async function save(messages, edited) {
+        async function save(messages, edited, live) {
+            if (stopped) { return; }
             const records = [];
             const deletes = [];
             for (const m of messages) {
@@ -125,15 +164,27 @@ enum MessageArchiveScripts {
                 records.push(r);
             }
             if (deletes.length) { await send('delete', { ids: deletes }); }
-            for (let i = 0; i < records.length; i += BATCH) {
+            for (let i = 0; i < records.length && !stopped; i += BATCH) {
                 const batch = records.slice(i, i + BATCH);
                 const reply = await send('upsert', { messages: batch });
                 const wanted = new Set((reply && reply.needMedia) || []);
                 for (const r of batch) {
-                    if (wanted.has(r.id) && r.hasMedia && !r.viewOnce) { queue.push(r); }
+                    if (wanted.has(r.id)) { enqueue(r, live); }
                 }
             }
             drain();
+        }
+
+        // Each file once per page; new messages' files before the backlog.
+        function enqueue(r, live) {
+            if (!r.hasMedia || r.viewOnce || queued.has(r.id)) { return; }
+            queued.add(r.id);
+            if (r.size && r.size > MAX_MEDIA) { send('mediaFailed', { id: r.id, reason: 'tooLarge' }); return; }
+            if (!live && r.timestamp && Date.now() / 1000 - r.timestamp > OLD_MEDIA) {
+                send('mediaFailed', { id: r.id, reason: 'old' });
+                return;
+            }
+            if (live) { queue.unshift(r); } else { queue.push(r); }
         }
 
         function base64(blob) {
@@ -145,49 +196,85 @@ enum MessageArchiveScripts {
             });
         }
 
-        // One file at a time, each chunk waiting for Nook's answer, so a large history never floods.
+        function rest(ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); }
+
+        // One file at a time, each chunk waiting for Nook's answer, a short rest between files.
+        // The attempt marker goes first, so a file that crashes the page is not tried again.
         async function drain() {
             if (downloading || stopped) { return; }
             downloading = true;
             try {
                 while (queue.length && !stopped) {
                     const r = queue.shift();
-                    try {
-                        const blob = await WPP.chat.downloadMedia(r.id);
-                        await send('mediaBegin', { id: r.id, fileName: r.fileName });
-                        for (let offset = 0; offset < blob.size; offset += CHUNK) {
-                            await send('mediaChunk', { id: r.id, base64: await base64(blob.slice(offset, offset + CHUNK)) });
-                        }
-                        await send('mediaEnd', { id: r.id });
-                    } catch (e) {
-                        // Media WhatsApp no longer has: the message row stays without a file.
+                    await send('mediaAttempt', { id: r.id });
+                    if (stopped) { break; }
+                    let blob;
+                    try { blob = await WPP.chat.downloadMedia(r.id); } catch (e) { blob = null; }
+                    if (!blob) { await send('mediaFailed', { id: r.id, reason: 'unavailable' }); continue; }
+                    if (blob.size > MAX_MEDIA) { await send('mediaFailed', { id: r.id, reason: 'tooLarge' }); continue; }
+                    await send('mediaBegin', { id: r.id, fileName: r.fileName, mimeType: blob.type || r.mimeType });
+                    for (let offset = 0; offset < blob.size && !stopped; offset += CHUNK) {
+                        await send('mediaChunk', { id: r.id, base64: await base64(blob.slice(offset, offset + CHUNK)) });
                     }
+                    if (!stopped) { await send('mediaEnd', { id: r.id }); }
+                    await rest(250);
                 }
+            } catch (e) {
+                // Never into WhatsApp's own error reporting.
             } finally {
                 downloading = false;
             }
         }
 
-        async function backfill() {
-            const chats = await WPP.chat.list();
-            for (const chat of chats) {
-                if (stopped) { return; }
-                const id = sid(chat && chat.id);
-                if (!id || id === 'status@broadcast') { continue; }
+        async function backfillChat(chat) {
+            const id = sid(chat && chat.id);
+            if (!id || id === 'status@broadcast') { return; }
+            // WhatsApp's own store holds the newest messages, ones sent from the phone included;
+            // getMessages starts at the last received message.
+            try {
+                if (chat.msgs && typeof chat.msgs.getModelsArray === 'function') { await save(chat.msgs.getModelsArray(), false, false); }
+            } catch (e) {}
+            let anchor = null;
+            while (!stopped) {
                 let messages = [];
-                try { messages = await WPP.chat.getMessages(id, { count: -1 }); } catch (e) { continue; }
-                await save(messages, false);
+                try {
+                    messages = await WPP.chat.getMessages(id, anchor ? { count: PAGE, id: anchor, direction: 'before' } : { count: PAGE });
+                } catch (e) { return; }
+                if (!messages || !messages.length) { return; }
+                await save(messages, false, false);
+                const oldest = sid(messages[0] && messages[0].id);
+                if (!oldest || oldest === anchor || messages.length < PAGE) { return; }
+                anchor = oldest;
+            }
+        }
+
+        async function backfill() {
+            if (backfilling || stopped) { return; }
+            backfilling = true;
+            try {
+                const chats = await WPP.chat.list();
+                for (const chat of chats) {
+                    if (stopped) { return; }
+                    await backfillChat(chat);
+                }
+            } finally {
+                backfilling = false;
             }
         }
 
         function start() {
+            if (started) { return; }
+            started = true;
             try {
-                WPP.on('chat.new_message', function (m) { save([m], false); });
-                WPP.on('chat.msg_edited', function (e) { if (e && e.msg) { save([e.msg], true); } });
+                WPP.on('chat.new_message', function (m) { save([m], false, true).catch(function () {}); });
+                WPP.on('chat.msg_edited', function (e) { if (e && e.msg) { save([e.msg], true, true).catch(function () {}); } });
                 WPP.on('chat.msg_revoke', function (e) {
                     const id = sid(e && e.refId);
                     if (id) { send('delete', { ids: [id] }); }
                 });
+                // A page opened before sign-in lists no chats; signing in brings them.
+                WPP.on('conn.authenticated', function () { backfill().catch(function () {}); });
+                WPP.on('conn.main_loaded', function () { backfill().catch(function () {}); });
                 send('status', { state: 'running' });
                 backfill().catch(function (e) { pause(e && e.message ? e.message : e); });
             } catch (e) {
@@ -196,9 +283,14 @@ enum MessageArchiveScripts {
         }
 
         if (!window.WPP || !WPP.chat || typeof WPP.on !== 'function') { pause('WA-JS is not available'); return; }
-        if (WPP.isReady) { start(); }
-        else if (WPP.webpack && typeof WPP.webpack.onReady === 'function') { WPP.webpack.onReady(start); }
-        else { pause('WA-JS did not become ready'); }
+        // WA-JS becomes ready on its own timers, after this script runs.
+        if (WPP.isFullReady) { start(); }
+        else if (WPP.loader && typeof WPP.loader.onFullReady === 'function') {
+            WPP.loader.onFullReady(start);
+            setTimeout(function () { if (!started) { pause('WA-JS did not become ready'); } }, READY_TIMEOUT);
+        } else {
+            pause('WA-JS did not become ready');
+        }
     })();
     """
 
@@ -210,7 +302,7 @@ enum MessageArchiveScripts {
         const handler = window.webkit && window.webkit.messageHandlers
             && window.webkit.messageHandlers.\(handlerName);
         if (!handler) { return; }
-        const kinds = new Set(['upsert', 'delete', 'deleteChat', 'mediaBegin', 'mediaChunk', 'mediaEnd', 'status']);
+        const kinds = new Set(['upsert', 'delete', 'mediaAttempt', 'mediaFailed', 'mediaBegin', 'mediaChunk', 'mediaEnd', 'status']);
 
         window.addEventListener('message', function (event) {
             if (event.source !== window || !event.data || typeof event.data !== 'object') { return; }

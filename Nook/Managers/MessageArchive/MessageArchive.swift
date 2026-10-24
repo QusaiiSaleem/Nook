@@ -10,6 +10,7 @@
 
 import Foundation
 import SQLite3
+import UniformTypeIdentifiers
 
 /// One WhatsApp message as the capture script reports it.
 struct ArchivedMessage: Codable, Equatable {
@@ -57,8 +58,12 @@ final class MessageArchive {
 
         let file = directory.appendingPathComponent("messages.sqlite")
         guard sqlite3_open_v2(file.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            db = nil
             throw MessageArchiveError.sqlite("cannot open \(file.path)")
         }
+        // A reader holding the lock (sqlite3 opened without -readonly) makes a write wait, not fail.
+        sqlite3_busy_timeout(db, 5000)
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         try execute(Self.schema)
         try Self.readme.write(to: directory.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
@@ -78,12 +83,28 @@ final class MessageArchive {
                                       expires_at)
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
                 ON CONFLICT (account, id) DO UPDATE SET
-                    chat_id = excluded.chat_id, chat_name = excluded.chat_name, sender_id = excluded.sender_id,
-                    sender_name = excluded.sender_name, from_me = excluded.from_me, ts = excluded.ts, kind = excluded.kind,
-                    text = excluded.text, file_name = excluded.file_name, mime_type = excluded.mime_type,
-                    quoted_id = excluded.quoted_id, edited = MAX(messages.edited, excluded.edited),
-                    view_once = excluded.view_once, links = excluded.links, search_text = excluded.search_text,
-                    people = excluded.people, saved_at = excluded.saved_at, expires_at = excluded.expires_at
+                    chat_id = excluded.chat_id,
+                    chat_name = COALESCE(NULLIF(excluded.chat_name, ''), messages.chat_name),
+                    sender_id = COALESCE(excluded.sender_id, messages.sender_id),
+                    sender_name = COALESCE(excluded.sender_name, messages.sender_name),
+                    from_me = excluded.from_me, ts = excluded.ts,
+                    kind = CASE WHEN excluded.kind IN ('ciphertext', 'unknown') THEN messages.kind ELSE excluded.kind END,
+                    text = CASE WHEN excluded.text IS NOT NULL OR excluded.edited THEN excluded.text ELSE messages.text END,
+                    links = CASE WHEN excluded.text IS NOT NULL OR excluded.edited THEN excluded.links ELSE messages.links END,
+                    search_text = CASE WHEN excluded.text IS NOT NULL OR excluded.edited OR excluded.file_name IS NOT NULL
+                                       THEN excluded.search_text ELSE messages.search_text END,
+                    people = CASE WHEN NULLIF(excluded.chat_name, '') IS NULL THEN messages.people ELSE excluded.people END,
+                    file_name = COALESCE(excluded.file_name, messages.file_name),
+                    mime_type = COALESCE(excluded.mime_type, messages.mime_type),
+                    quoted_id = COALESCE(excluded.quoted_id, messages.quoted_id),
+                    edited = MAX(messages.edited, excluded.edited),
+                    view_once = MAX(messages.view_once, excluded.view_once),
+                    expires_at = excluded.expires_at, saved_at = excluded.saved_at
+                -- Every load re-sends history: leave a row alone unless something in it changed.
+                WHERE messages.text IS NOT excluded.text OR messages.chat_name IS NOT excluded.chat_name
+                   OR messages.sender_name IS NOT excluded.sender_name OR messages.kind IS NOT excluded.kind
+                   OR messages.edited IS NOT excluded.edited OR messages.expires_at IS NOT excluded.expires_at
+                   OR messages.file_name IS NOT excluded.file_name OR messages.view_once IS NOT excluded.view_once
                 """)
             defer { sqlite3_finalize(statement) }
             let now = Date().timeIntervalSince1970
@@ -150,14 +171,16 @@ final class MessageArchive {
     // MARK: - Media
 
     /// A new, empty file for a message's media, under media/<account>/<yyyy-mm>/.
-    func beginMedia(account: String, id: String, fileName: String?) throws -> URL {
+    func beginMedia(account: String, id: String, fileName: String?, mimeType: String?) throws -> URL {
         let month = DateFormatter()
         month.dateFormat = "yyyy-MM"
         let folder = directory.appendingPathComponent("media")
             .appendingPathComponent(Self.safe(account))
             .appendingPathComponent(month.string(from: try timestamp(account: account, id: id) ?? Date()))
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let ext = (fileName as NSString?)?.pathExtension.nilIfEmpty.map(Self.safe) ?? "bin"
+        // Photos, voice notes and videos have no file name; the type gives an extension Finder opens.
+        let ext = ((fileName as NSString?)?.pathExtension.nilIfEmpty
+            ?? mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }).map(Self.safe) ?? "bin"
         let file = folder.appendingPathComponent("\(Self.safe(id)).\(ext)")
         guard FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
             throw MessageArchiveError.sqlite("cannot create \(file.path)")
@@ -176,7 +199,7 @@ final class MessageArchive {
         guard let relative = mediaRelativePath(file) else {
             throw MessageArchiveError.sqlite("media file is outside the archive: \(file.path)")
         }
-        let update = try prepare("UPDATE messages SET media_path = ?3 WHERE account = ?1 AND id = ?2")
+        let update = try prepare("UPDATE messages SET media_path = ?3, media_state = 'saved' WHERE account = ?1 AND id = ?2")
         defer { sqlite3_finalize(update) }
         bind(update, 1, account); bind(update, 2, id); bind(update, 3, relative)
         try step(update)
@@ -184,19 +207,33 @@ final class MessageArchive {
 
     // MARK: - Reading
 
-    /// Of `ids`, the saved messages that have no media file yet.
+    /// Of `ids`, the saved messages whose file has not been tried yet. A file tried once (the page
+    /// may have crashed on it), unavailable, too large or held back is not asked for again.
     func missingMedia(account: String, ids: [String]) throws -> [String] {
-        let statement = try prepare("SELECT 1 FROM messages WHERE account = ?1 AND id = ?2 AND media_path IS NULL AND view_once = 0")
+        try filter(ids, account: account, where: "media_path IS NULL AND view_once = 0 AND media_state IS NULL")
+    }
+
+    /// Whether a file may be received now: in the copy, not view-once, not saved or given up on.
+    func mediaAllowed(account: String, id: String) throws -> Bool {
+        try !filter([id], account: account,
+                    where: "media_path IS NULL AND view_once = 0 AND (media_state IS NULL OR media_state = 'attempted')").isEmpty
+    }
+
+    /// Records where a file stands: attempted, unavailable, tooLarge or old.
+    func markMedia(account: String, id: String, state: String) throws {
+        let update = try prepare("UPDATE messages SET media_state = ?3 WHERE account = ?1 AND id = ?2 AND media_path IS NULL")
+        defer { sqlite3_finalize(update) }
+        bind(update, 1, account); bind(update, 2, id); bind(update, 3, state)
+        try step(update)
+    }
+
+    private func filter(_ ids: [String], account: String, where condition: String) throws -> [String] {
+        let statement = try prepare("SELECT 1 FROM messages WHERE account = ?1 AND id = ?2 AND \(condition)")
         defer { sqlite3_finalize(statement) }
         return ids.filter { id in
             sqlite3_reset(statement); bind(statement, 1, account); bind(statement, 2, id)
             return sqlite3_step(statement) == SQLITE_ROW
         }
-    }
-
-    /// Whether a file may be saved for this message: it is in the copy and not view-once.
-    func mediaAllowed(account: String, id: String) throws -> Bool {
-        try !missingMedia(account: account, ids: [id]).isEmpty
     }
 
     /// Newest first. Words must all appear in the message text or file name; Arabic matches
@@ -322,6 +359,7 @@ final class MessageArchive {
             text TEXT, file_name TEXT, mime_type TEXT, quoted_id TEXT,
             edited INTEGER NOT NULL DEFAULT 0, view_once INTEGER NOT NULL DEFAULT 0, links TEXT, media_path TEXT,
             search_text TEXT NOT NULL DEFAULT '', people TEXT NOT NULL DEFAULT '', saved_at REAL, expires_at REAL,
+            media_state TEXT,
             UNIQUE (account, id));
         CREATE INDEX IF NOT EXISTS messages_chat ON messages (account, chat_id, ts);
         CREATE INDEX IF NOT EXISTS messages_expiry ON messages (expires_at) WHERE expires_at IS NOT NULL;
@@ -333,7 +371,9 @@ final class MessageArchive {
         CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
             INSERT INTO messages_fts (messages_fts, rowid, search_text, people) VALUES ('delete', old.rowid, old.search_text, old.people);
         END;
-        CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+        DROP TRIGGER IF EXISTS messages_au;
+        CREATE TRIGGER messages_au AFTER UPDATE OF search_text, people ON messages
+        WHEN old.search_text IS NOT new.search_text OR old.people IS NOT new.people BEGIN
             INSERT INTO messages_fts (messages_fts, rowid, search_text, people) VALUES ('delete', old.rowid, old.search_text, old.people);
             INSERT INTO messages_fts (rowid, search_text, people) VALUES (new.rowid, new.search_text, new.people);
         END;
@@ -342,8 +382,10 @@ final class MessageArchive {
     private static let readme = """
         # Nook's local WhatsApp copy
 
-        Written by Nook (Settings > Spaces > Keep a local copy). Lives only on this Mac: not synced,
-        excluded from Time Machine. It follows WhatsApp: messages deleted there are deleted here.
+        Written by Nook while Keep a Local Copy is on (the site menu on WhatsApp, per Space). Lives
+        only on this Mac: not synced, excluded from Time Machine. Messages deleted for everyone and
+        disappearing messages whose timer ran out are removed here too. Messages or chats deleted
+        only on this side (delete for me, clear chat, delete chat) are not removed yet.
         Open read-only, for example: `sqlite3 -readonly messages.sqlite`.
 
         ## messages
@@ -357,6 +399,8 @@ final class MessageArchive {
         - `quoted_id`: the message this one replies to; `edited`, `view_once` (media never saved)
         - `links`: URLs in the message, one per line
         - `media_path`: the saved file, relative to this folder (NULL until downloaded)
+        - `media_state`: saved, attempted, unavailable, tooLarge (over 100 MB), or old (media older
+          than 30 days is held back for now)
         - `expires_at`: for disappearing messages, when they leave this copy
         - `search_text`, `people`: normalized copies used for search (Arabic without marks:
           أ/إ/آ→ا, ى→ي, ة→ه, no tashkeel or tatweel)

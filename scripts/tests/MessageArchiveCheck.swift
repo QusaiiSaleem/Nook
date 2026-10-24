@@ -7,6 +7,7 @@
 //  the search entry and the media file with them, private files kept out of backups.
 
 import Foundation
+import SQLite3
 
 @main
 struct MessageArchiveCheck {
@@ -43,6 +44,10 @@ struct MessageArchiveCheck {
         try expired_messages_are_purged()
         try files_outside_the_media_folder_are_never_touched()
         try media_bookkeeping()
+        try unchanged_upsert_leaves_the_search_index_alone()
+        try partial_update_keeps_good_values()
+        try media_extension_follows_the_type()
+        try media_states_stop_retries()
         print("MessageArchiveCheck passed")
     }
 
@@ -72,7 +77,7 @@ struct MessageArchiveCheck {
     static func delete_removes_row_search_and_media() throws {
         let (archive, _) = try fresh()
         try archive.upsert([message("m1", text: "the contract")])
-        let file = try archive.beginMedia(account: "space-a", id: "m1", fileName: "contract.pdf")
+        let file = try archive.beginMedia(account: "space-a", id: "m1", fileName: "contract.pdf", mimeType: "application/pdf")
         try archive.appendMedia(Data("%PDF-1.7".utf8), to: file)
         try archive.finishMedia(account: "space-a", id: "m1", at: file)
         precondition(FileManager.default.fileExists(atPath: file.path))
@@ -136,7 +141,7 @@ struct MessageArchiveCheck {
         var once = message("vo1")
         once.viewOnce = true
         try archive.upsert([message("m1"), message("m2"), once])
-        let file = try archive.beginMedia(account: "space-a", id: "m1", fileName: "a.jpg")
+        let file = try archive.beginMedia(account: "space-a", id: "m1", fileName: "a.jpg", mimeType: "image/jpeg")
         try archive.finishMedia(account: "space-a", id: "m1", at: file)
         let missing = try archive.missingMedia(account: "space-a", ids: ["m1", "m2", "nope"])
         let allowed = try archive.mediaAllowed(account: "space-a", id: "m2")
@@ -146,6 +151,60 @@ struct MessageArchiveCheck {
         precondition(allowed)
         precondition(!viewOnce, "view-once media is refused")
         precondition(!unknown, "unknown messages get no file")
+    }
+
+    /// Every load re-sends history; unchanged rows must not rewrite their search entries.
+    static func unchanged_upsert_leaves_the_search_index_alone() throws {
+        let (archive, dir) = try fresh()
+        let batch = [message("m1", text: "one"), message("m2", text: "two"), message("m3", text: "three")]
+        try archive.upsert(batch)
+        let before = ftsRows(dir)
+        try archive.upsert(batch)
+        try archive.upsert(batch)
+        precondition(ftsRows(dir) == before, "search index grew from \(before) to \(ftsRows(dir)) rows on unchanged upserts")
+    }
+
+    /// A partly loaded model (no chat name, no text) must not blank what the copy already has.
+    static func partial_update_keeps_good_values() throws {
+        let (archive, _) = try fresh()
+        try archive.upsert([message("m1", text: "the contract is signed")])
+        var partial = message("m1", text: nil)
+        partial.chatName = ""
+        partial.kind = "ciphertext"
+        try archive.upsert([partial])
+        let hit = find(archive, "contract").first
+        precondition(hit?.text == "the contract is signed" && hit?.chatName == "Ahmad" && hit?.kind == "chat",
+                     "partial update overwrote: \(String(describing: hit))")
+    }
+
+    static func media_extension_follows_the_type() throws {
+        let (archive, _) = try fresh()
+        try archive.upsert([message("m1")])
+        let photo = try archive.beginMedia(account: "space-a", id: "m1", fileName: nil, mimeType: "image/jpeg")
+        precondition(photo.pathExtension == "jpeg" || photo.pathExtension == "jpg", "photo saved as .\(photo.pathExtension)")
+        let named = try archive.beginMedia(account: "space-a", id: "m1", fileName: "report.pdf", mimeType: "application/pdf")
+        precondition(named.pathExtension == "pdf")
+    }
+
+    /// A file tried once (the page may have crashed on it), unavailable, too large or held back is
+    /// not asked for again on every load.
+    static func media_states_stop_retries() throws {
+        let (archive, _) = try fresh()
+        try archive.upsert([message("m1"), message("m2"), message("m3")])
+        try archive.markMedia(account: "space-a", id: "m1", state: "attempted")
+        try archive.markMedia(account: "space-a", id: "m2", state: "unavailable")
+        let missing = try archive.missingMedia(account: "space-a", ids: ["m1", "m2", "m3"])
+        precondition(missing == ["m3"], "still wanted: \(missing)")
+    }
+
+    static func ftsRows(_ dir: URL) -> Int {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dir.appendingPathComponent("messages.sqlite").path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else { return -1 }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM messages_fts_data", -1, &statement, nil)
+        defer { sqlite3_finalize(statement) }
+        return sqlite3_step(statement) == SQLITE_ROW ? Int(sqlite3_column_int(statement, 0)) : -1
     }
 
     static func readme_written() throws {

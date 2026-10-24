@@ -19,7 +19,9 @@ enum MessageArchivePolicy {
         scheme.lowercased() == "https" && host.lowercased() == Self.host && isMainFrame && !isPrivateOrAgent
     }
 
-    static func record(from body: [String: Any], account: String) -> ArchivedMessage? {
+    /// A record from the page. A disappearing message that WhatsApp still shows after its timer
+    /// ran out was kept by someone, so it gets no expiry here.
+    static func record(from body: [String: Any], account: String, now: Date = Date()) -> ArchivedMessage? {
         guard let id = text(body["id"], 256), !id.isEmpty, let chatID = text(body["chatID"], 256), !chatID.isEmpty
         else { return nil }
         return ArchivedMessage(
@@ -32,12 +34,12 @@ enum MessageArchivePolicy {
             quotedID: text(body["quotedID"], 256), edited: body["edited"] as? Bool ?? false,
             viewOnce: body["viewOnce"] as? Bool ?? false,
             links: ((body["links"] as? [Any]) ?? []).prefix(20).compactMap { text($0, 2048) },
-            expiresAt: number(body["expiresAt"]).map(Date.init(timeIntervalSince1970:)))
+            expiresAt: number(body["expiresAt"]).map(Date.init(timeIntervalSince1970:)).flatMap { $0 > now ? $0 : nil })
     }
 
     /// A media chunk's bytes, or nil when it is not base64 or too large.
     static func chunk(from base64: String) -> Data? {
-        guard base64.count <= (maxChunkBytes / 3 + 1) * 4, let data = Data(base64Encoded: base64),
+        guard base64.utf8.count <= (maxChunkBytes / 3 + 1) * 4, let data = Data(base64Encoded: base64),
               data.count <= maxChunkBytes else { return nil }
         return data
     }

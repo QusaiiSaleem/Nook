@@ -25,10 +25,15 @@ struct MessageArchivePolicyCheck {
             "timestamp": 1_790_000_000.0, "kind": "chat", "text": "hello", "edited": false, "viewOnce": false,
             "links": ["https://example.com"], "expiresAt": 1_790_086_400.0, "account": "someone-else"
         ]
-        let decoded = MessageArchivePolicy.record(from: page, account: "space-a")
+        let now = Date(timeIntervalSince1970: 1_790_000_100)
+        let decoded = MessageArchivePolicy.record(from: page, account: "space-a", now: now)
         precondition(decoded?.account == "space-a" && decoded?.id == "m1" && decoded?.text == "hello")
         precondition(decoded?.timestamp == Date(timeIntervalSince1970: 1_790_000_000))
         precondition(decoded?.expiresAt == Date(timeIntervalSince1970: 1_790_086_400))
+        // Still in WhatsApp after its timer ran out: someone kept it, so it stays.
+        var kept = page
+        kept["expiresAt"] = 1_790_000_050.0
+        precondition(MessageArchivePolicy.record(from: kept, account: "space-a", now: now)?.expiresAt == nil, "a kept message would be purged")
         precondition(MessageArchivePolicy.record(from: ["chatID": "c1@c.us"], account: "space-a") == nil, "no id, no record")
         precondition(MessageArchivePolicy.record(from: ["id": "m1"], account: "space-a") == nil, "no chat, no record")
         var long = page

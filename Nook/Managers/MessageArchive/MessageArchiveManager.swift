@@ -27,8 +27,10 @@ final class MessageArchiveManager {
     private let queue = DispatchQueue(label: "com.qusai.nook.message-archive")
     /// Touched only on `queue`.
     nonisolated(unsafe) private var store: MessageArchive?
-    /// Files being received, by "<account>|<id>". Touched only on `queue`.
-    nonisolated(unsafe) private var openMedia: [String: URL] = [:]
+    /// Files being received and their bytes so far, by "<account>|<id>". Touched only on `queue`.
+    nonisolated(unsafe) private var openMedia: [String: (file: URL, bytes: Int)] = [:]
+    /// The page refuses files over 100 MB; this guards the total a page may send for one file.
+    private static let maxFileBytes = 110 * 1024 * 1024
     /// What each Space's capture last reported.
     private(set) var status: [UUID: (running: Bool, reason: String?)] = [:]
 
@@ -74,7 +76,8 @@ final class MessageArchiveManager {
             contentWorld: MessageArchiveScripts.relayWorld, name: MessageArchiveScripts.handlerName)
         // The user script covers later documents; this one has already loaded.
         webView.evaluateJavaScript(relay.source, in: nil, in: MessageArchiveScripts.relayWorld)
-        webView.evaluateJavaScript(waJS, in: nil, in: .page) { _ in
+        // The prelude goes in the same evaluation, so WA-JS reads it as it loads.
+        webView.evaluateJavaScript(MessageArchiveScripts.waJSPrelude + "\n" + waJS, in: nil, in: .page) { _ in
             webView.evaluateJavaScript(MessageArchiveScripts.captureSource, in: nil, in: .page)
         }
     }
@@ -100,17 +103,18 @@ final class MessageArchiveManager {
         queue.async { [self] in try? store?.delete(account: account, ids: ids) }
     }
 
-    func deleteChat(_ chatID: String, account: String) {
-        queue.async { [self] in try? store?.deleteChat(account: account, chatID: chatID) }
+    func markMedia(id: String, state: String, account: String) {
+        queue.async { [self] in try? store?.markMedia(account: account, id: id, state: state) }
     }
 
-    func beginMedia(id: String, fileName: String?, account: String, completion: @escaping @MainActor () -> Void) {
+    func beginMedia(id: String, fileName: String?, mimeType: String?, account: String,
+                    completion: @escaping @MainActor () -> Void) {
         queue.async { [self] in
             let key = "\(account)|\(id)"
-            if let stale = openMedia.removeValue(forKey: key) { try? FileManager.default.removeItem(at: stale) }
+            if let stale = openMedia.removeValue(forKey: key) { try? FileManager.default.removeItem(at: stale.file) }
             if (try? store?.mediaAllowed(account: account, id: id)) == true,
-               let file = try? store?.beginMedia(account: account, id: id, fileName: fileName) {
-                openMedia[key] = file
+               let file = try? store?.beginMedia(account: account, id: id, fileName: fileName, mimeType: mimeType) {
+                openMedia[key] = (file, 0)
             }
             DispatchQueue.main.async { completion() }
         }
@@ -118,15 +122,25 @@ final class MessageArchiveManager {
 
     func appendMedia(_ data: Data, id: String, account: String, completion: @escaping @MainActor () -> Void) {
         queue.async { [self] in
-            if let file = openMedia["\(account)|\(id)"] { try? store?.appendMedia(data, to: file) }
+            let key = "\(account)|\(id)"
+            if let open = openMedia[key] {
+                if open.bytes + data.count > Self.maxFileBytes {
+                    openMedia[key] = nil
+                    try? FileManager.default.removeItem(at: open.file)
+                    try? store?.markMedia(account: account, id: id, state: "tooLarge")
+                } else {
+                    try? store?.appendMedia(data, to: open.file)
+                    openMedia[key] = (open.file, open.bytes + data.count)
+                }
+            }
             DispatchQueue.main.async { completion() }
         }
     }
 
     func finishMedia(id: String, account: String, completion: @escaping @MainActor () -> Void) {
         queue.async { [self] in
-            if let file = openMedia.removeValue(forKey: "\(account)|\(id)") {
-                try? store?.finishMedia(account: account, id: id, at: file)
+            if let open = openMedia.removeValue(forKey: "\(account)|\(id)") {
+                try? store?.finishMedia(account: account, id: id, at: open.file)
             }
             DispatchQueue.main.async { completion() }
         }

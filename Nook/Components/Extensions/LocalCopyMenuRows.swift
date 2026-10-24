@@ -35,8 +35,9 @@ struct LocalCopyMenuRows: View {
         .onChange(of: isOn) { _, enabled in
             guard enabled != manager.isEnabled(spaceID: spaceID) else { return }
             manager.setEnabled(enabled, spaceID: spaceID)
-            // Start on the page already open instead of waiting for its next load.
-            if enabled, let webView = session.webView { manager.install(in: webView, session: session) }
+            // A fresh load installs the capture once (WA-JS must not load twice into one page);
+            // turning it off stops the page's capture on its next message.
+            if enabled { session.webView?.reload() }
             refresh()
         }
 
