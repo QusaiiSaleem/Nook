@@ -88,6 +88,29 @@ enum InspectScripts {
     })()
     """#
 
+    /// Before real Tab presses: remembers how each focusable element looks unfocused.
+    static let focusBaseline = #"""
+    (function () {
+        const signature = (el) => { const s = getComputedStyle(el); return [s.outlineStyle, s.outlineWidth, s.outlineColor, s.boxShadow, s.borderTopColor, s.backgroundColor, s.textDecorationLine].join('|'); };
+        const base = new WeakMap();
+        const focusable = Array.from(document.querySelectorAll('a[href], button, input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"])')).slice(0, 200);
+        for (const el of focusable) { base.set(el, signature(el)); }
+        Object.defineProperty(window, '__nookFocusBase', { value: { base: base, signature: signature }, configurable: true });
+        return String(focusable.length);
+    })()
+    """#
+
+    /// After each Tab press: the focused element and whether it looks any different.
+    static let focusCheck = #"""
+    (function () {
+        const el = document.activeElement;
+        const state = window.__nookFocusBase;
+        if (!el || el === document.body || !state || !state.base.has(el)) { return JSON.stringify({ selector: null }); }
+        const describe = (node) => node.id ? node.tagName.toLowerCase() + '#' + node.id : node.tagName.toLowerCase() + Array.from(node.classList).slice(0, 2).map((c) => '.' + c).join('');
+        return JSON.stringify({ selector: describe(el), changed: state.signature(el) !== state.base.get(el) });
+    })()
+    """#
+
     /// The audit for one width. Width-independent rules run once, at 1280.
     static func audit(width: Int, phone: Bool) -> String {
         "(\(auditSource))(\(width), \(phone ? "true" : "false"))"
