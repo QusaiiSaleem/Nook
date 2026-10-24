@@ -31,6 +31,8 @@ struct ArchivedMessage: Codable, Equatable {
     var links: [String]
     /// Relative to the archive folder, once the file has arrived.
     var mediaPath: String? = nil
+    /// When a disappearing message expires; the copy drops it then, as WhatsApp does.
+    var expiresAt: Date? = nil
 }
 
 enum MessageArchiveError: Error, CustomStringConvertible {
@@ -72,15 +74,16 @@ final class MessageArchive {
         try transaction {
             let statement = try prepare("""
                 INSERT INTO messages (account, id, chat_id, chat_name, sender_id, sender_name, from_me, ts, kind, text,
-                                      file_name, mime_type, quoted_id, edited, view_once, links, search_text, people, saved_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                                      file_name, mime_type, quoted_id, edited, view_once, links, search_text, people, saved_at,
+                                      expires_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
                 ON CONFLICT (account, id) DO UPDATE SET
                     chat_id = excluded.chat_id, chat_name = excluded.chat_name, sender_id = excluded.sender_id,
                     sender_name = excluded.sender_name, from_me = excluded.from_me, ts = excluded.ts, kind = excluded.kind,
                     text = excluded.text, file_name = excluded.file_name, mime_type = excluded.mime_type,
                     quoted_id = excluded.quoted_id, edited = MAX(messages.edited, excluded.edited),
                     view_once = excluded.view_once, links = excluded.links, search_text = excluded.search_text,
-                    people = excluded.people, saved_at = excluded.saved_at
+                    people = excluded.people, saved_at = excluded.saved_at, expires_at = excluded.expires_at
                 """)
             defer { sqlite3_finalize(statement) }
             let now = Date().timeIntervalSince1970
@@ -98,6 +101,7 @@ final class MessageArchive {
                 bind(statement, 17, SearchText.normalize([m.text, m.fileName].compactMap { $0 }.joined(separator: " ")))
                 bind(statement, 18, SearchText.normalize([m.senderName, m.chatName].compactMap { $0 }.joined(separator: " ")))
                 sqlite3_bind_double(statement, 19, now)
+                if let expiry = m.expiresAt { sqlite3_bind_double(statement, 20, expiry.timeIntervalSince1970) } else { sqlite3_bind_null(statement, 20) }
                 try step(statement)
             }
         }
@@ -119,6 +123,18 @@ final class MessageArchive {
             }
         }
         removeMedia(files)
+    }
+
+    /// Removes disappearing messages whose timer ran out, with their search entries and media.
+    func purgeExpired(now: Date = Date()) throws {
+        let statement = try prepare("SELECT account, id FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?1")
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_double(statement, 1, now.timeIntervalSince1970)
+        var byAccount: [String: [String]] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let account = column(statement, 0), let id = column(statement, 1) { byAccount[account, default: []].append(id) }
+        }
+        for (account, ids) in byAccount { try delete(account: account, ids: ids) }
     }
 
     /// Removes a whole chat: deleted or cleared in WhatsApp.
@@ -157,7 +173,9 @@ final class MessageArchive {
     }
 
     func finishMedia(account: String, id: String, at file: URL) throws {
-        let relative = file.path.replacingOccurrences(of: directory.path + "/", with: "")
+        guard let relative = mediaRelativePath(file) else {
+            throw MessageArchiveError.sqlite("media file is outside the archive: \(file.path)")
+        }
         let update = try prepare("UPDATE messages SET media_path = ?3 WHERE account = ?1 AND id = ?2")
         defer { sqlite3_finalize(update) }
         bind(update, 1, account); bind(update, 2, id); bind(update, 3, relative)
@@ -224,8 +242,20 @@ final class MessageArchive {
         return sqlite3_step(statement) == SQLITE_ROW ? Date(timeIntervalSince1970: sqlite3_column_double(statement, 0)) : nil
     }
 
+    /// Deletes only files that resolve inside media/, whatever the database says.
     private func removeMedia(_ paths: [String]) {
-        for path in paths { try? FileManager.default.removeItem(at: directory.appendingPathComponent(path)) }
+        for path in paths {
+            let file = directory.appendingPathComponent(path)
+            if mediaRelativePath(file) != nil { try? FileManager.default.removeItem(at: file) }
+        }
+    }
+
+    /// The path relative to the archive folder when `file` resolves inside media/, else nil.
+    private func mediaRelativePath(_ file: URL) -> String? {
+        let root = directory.appendingPathComponent("media").resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        let resolved = file.resolvingSymlinksInPath().standardizedFileURL.path
+        guard resolved.hasPrefix(root) else { return nil }
+        return "media/" + resolved.dropFirst(root.count)
     }
 
     private func transaction(_ body: () throws -> Void) throws {
@@ -276,7 +306,7 @@ final class MessageArchive {
             sender_id TEXT, sender_name TEXT, from_me INTEGER NOT NULL, ts REAL NOT NULL, kind TEXT NOT NULL,
             text TEXT, file_name TEXT, mime_type TEXT, quoted_id TEXT,
             edited INTEGER NOT NULL DEFAULT 0, view_once INTEGER NOT NULL DEFAULT 0, links TEXT, media_path TEXT,
-            search_text TEXT NOT NULL DEFAULT '', people TEXT NOT NULL DEFAULT '', saved_at REAL,
+            search_text TEXT NOT NULL DEFAULT '', people TEXT NOT NULL DEFAULT '', saved_at REAL, expires_at REAL,
             UNIQUE (account, id));
         CREATE INDEX IF NOT EXISTS messages_chat ON messages (account, chat_id, ts);
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5 (
@@ -311,6 +341,7 @@ final class MessageArchive {
         - `quoted_id`: the message this one replies to; `edited`, `view_once` (media never saved)
         - `links`: URLs in the message, one per line
         - `media_path`: the saved file, relative to this folder (NULL until downloaded)
+        - `expires_at`: for disappearing messages, when they leave this copy
         - `search_text`, `people`: normalized copies used for search (Arabic without marks:
           أ/إ/آ→ا, ى→ي, ة→ه, no tashkeel or tatweel)
 

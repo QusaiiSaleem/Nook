@@ -40,6 +40,8 @@ struct MessageArchiveCheck {
         try accounts_stay_apart()
         try files_are_private_and_excluded()
         try readme_written()
+        try expired_messages_are_purged()
+        try files_outside_the_media_folder_are_never_touched()
         print("MessageArchiveCheck passed")
     }
 
@@ -103,6 +105,28 @@ struct MessageArchiveCheck {
         precondition(dbMode == 0o600, "database mode \(String(dbMode ?? 0, radix: 8))")
         let excluded = try dir.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup
         precondition(excluded == true, "the folder is excluded from backups")
+    }
+
+    /// Disappearing messages leave the copy when their timer runs out, as in WhatsApp.
+    static func expired_messages_are_purged() throws {
+        let (archive, _) = try fresh()
+        var vanishing = message("m1", text: "this disappears")
+        vanishing.expiresAt = Date(timeIntervalSince1970: 1_790_000_100)
+        try archive.upsert([vanishing, message("m2", text: "this stays")])
+        try archive.purgeExpired(now: Date(timeIntervalSince1970: 1_790_000_200))
+        precondition(count(archive, "space-a") == 1)
+        precondition(find(archive, "disappears").isEmpty && find(archive, "stays").count == 1)
+    }
+
+    /// Only files under the archive's media folder are ever recorded or deleted.
+    static func files_outside_the_media_folder_are_never_touched() throws {
+        let (archive, dir) = try fresh()
+        let outside = dir.deletingLastPathComponent().appendingPathComponent("keep-me.txt")
+        try Data("mine".utf8).write(to: outside)
+        try archive.upsert([message("m1")])
+        precondition((try? archive.finishMedia(account: "space-a", id: "m1", at: outside)) == nil, "a file outside media/ is refused")
+        try archive.delete(account: "space-a", ids: ["m1"])
+        precondition(FileManager.default.fileExists(atPath: outside.path), "a file outside media/ survives a delete")
     }
 
     static func readme_written() throws {
