@@ -647,6 +647,13 @@ extension TabsController {
         perform(owner, "updateSpace") { try $0.updateSpace(spaceID, name: name, icon: icon, accentHex: accentHex) }
     }
 
+    /// Sets or clears (nil) the mark a space shows in the switcher. The Agent space keeps its
+    /// sparkles, like its name and look.
+    public func setSpaceMark(_ spaceID: UUID, mark: SpaceMark?) {
+        guard let owner = owner(ofSpace: spaceID), spaceID != agentSpaceID else { return }
+        perform(owner, "setSpaceMark") { try $0.setSpaceMark(spaceID, mark: mark) }
+    }
+
     func moveSpace(_ spaceID: UUID, after: UUID?) {
         guard let owner = owner(ofSpace: spaceID) else { return }
         perform(owner, "moveSpace") { try $0.moveSpace(spaceID, after: after) }

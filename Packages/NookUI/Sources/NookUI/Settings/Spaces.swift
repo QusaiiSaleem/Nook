@@ -19,6 +19,7 @@ public struct SpacesSettingsView: View {
     /// Cookie and record counts per space, filled in as each store answers.
     @State private var stats: [UUID: String] = [:]
     @State private var showAccentPickerFor: UUID?
+    @State private var showMarkPickerFor: UUID?
 
     public init() {}
 
@@ -65,6 +66,30 @@ public struct SpacesSettingsView: View {
                     set: { tabs.updateSpace(space.id, name: nil, icon: nil, accentHex: $0) }
                 ))
                 .padding(NookDesign.Spacing.lg)
+            }
+
+            // The mark that replaces this space's dot in the switcher (SpaceMarkPicker).
+            Button {
+                showMarkPickerFor = space.id
+            } label: {
+                Group {
+                    if let mark = space.mark {
+                        SpaceMarkView(mark: mark, size: NookDesign.Size.spaceIcon)
+                    } else {
+                        Image(systemName: "face.smiling")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: NookDesign.Size.iconButton, height: NookDesign.Size.iconButton)
+            }
+            .buttonStyle(.plain)
+            .help("Mark")
+            .popover(isPresented: Binding(
+                get: { showMarkPickerFor == space.id },
+                set: { if !$0 { showMarkPickerFor = nil } }
+            )) {
+                SpaceMarkPicker(space: space)
+                    .padding(NookDesign.Spacing.lg)
             }
 
             VStack(alignment: .leading, spacing: NookDesign.Spacing.xxs) {

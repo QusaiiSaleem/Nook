@@ -11,8 +11,12 @@ public struct SpaceRecord: Identifiable, Codable, Hashable, Sendable {
     public var order: OrderKey
     public var modifiedAt: Date
     public var deletedAt: Date?
+    /// Shown in place of the space's dot in the switcher; nil keeps the dot. Not `icon`, which
+    /// carries the Agent space's marker. Files from before it existed decode with none.
+    public var mark: SpaceMark?
 
-    public init(id: UUID = UUID(), name: String, icon: String, accentHex: String, order: OrderKey, modifiedAt: Date = Date(), deletedAt: Date? = nil) {
+    public init(id: UUID = UUID(), name: String, icon: String, accentHex: String, order: OrderKey, modifiedAt: Date = Date(),
+                deletedAt: Date? = nil, mark: SpaceMark? = nil) {
         self.id = id
         self.name = name
         self.icon = icon
@@ -20,6 +24,31 @@ public struct SpaceRecord: Identifiable, Codable, Hashable, Sendable {
         self.order = order
         self.modifiedAt = modifiedAt
         self.deletedAt = deletedAt
+        self.mark = mark
+    }
+}
+
+/// A space's mark: an emoji, or a small SVG the person chose.
+public enum SpaceMark: Codable, Hashable, Sendable {
+    case emoji(String)
+    case svg(Data)
+
+    /// Larger SVGs are refused: the mark is saved in the tab files, which every save rewrites.
+    public static let svgLimit = 64 * 1024
+
+    /// The first character of `text` when it is an emoji, else nil.
+    public static func emoji(from text: String) -> SpaceMark? {
+        guard let first = text.trimmingCharacters(in: .whitespacesAndNewlines).first else { return nil }
+        // Digits, # and * carry the emoji property for keycaps, so a scalar counts only when it
+        // shows as emoji by default or sits past the plain-text symbols.
+        let isEmoji = first.unicodeScalars.contains { $0.properties.isEmojiPresentation || ($0.properties.isEmoji && $0.value > 0x238C) }
+        return isEmoji ? .emoji(String(first)) : nil
+    }
+
+    /// `data` when it is an SVG document of at most `svgLimit` bytes, else nil.
+    public static func svg(from data: Data) -> SpaceMark? {
+        guard data.count <= svgLimit, String(decoding: data.prefix(1024), as: UTF8.self).contains("<svg") else { return nil }
+        return .svg(data)
     }
 }
 
