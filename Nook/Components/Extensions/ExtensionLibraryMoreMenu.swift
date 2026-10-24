@@ -74,19 +74,17 @@ struct MoreMenuView: View {
                     MoreMenuItem(icon: "video.fill", iconColor: .cyan, label: "Camera") {
                         SitePermissionPicker(permission: .camera, host: host, settings: settings)
                     }
+
+                    // Nook's own Notification shim asks per site (WebNotificationScripts), so the
+                    // answer can be changed here like camera and microphone.
+                    MoreMenuItem(icon: "bell.fill", iconColor: .red, label: "Notifications") {
+                        SitePermissionPicker(permission: .notifications, host: host, settings: settings)
+                    }
                 }
 
-                // Nook-wide, not per site: WebKit exposes no per-origin delegate for either on
-                // macOS, so these open the System Settings pane that actually governs them
-                // rather than implying this site can be changed here.
-                MoreMenuItem(
-                    icon: "bell.fill",
-                    iconColor: .red,
-                    label: "Notifications",
-                    detail: "Nook",
-                    action: { openSystemSettings("Notifications") }
-                )
-
+                // Nook-wide, not per site: WebKit exposes no per-origin delegate for location on
+                // macOS, so this opens the System Settings pane that actually governs it rather
+                // than implying this site can be changed here.
                 MoreMenuItem(
                     icon: "location.fill",
                     iconColor: .blue,
