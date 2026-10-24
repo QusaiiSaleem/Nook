@@ -141,6 +141,14 @@ extension BrowserManager: PageSessionDelegate {
     func closeWebNotification(id: String, from session: PageSession) {
         webNotificationManager.close(id: id, from: session)
     }
+
+    // MARK: Message Archive
+
+    func installMessageArchive(in webView: WKWebView, session: PageSession) {
+        // Only WhatsApp pages create the manager (and its folder).
+        guard webView.url?.host?.lowercased() == MessageArchivePolicy.host else { return }
+        messageArchiveManager.install(in: webView, session: session)
+    }
 }
 
 // MARK: - TabEventObserver

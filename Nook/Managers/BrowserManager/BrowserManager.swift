@@ -393,6 +393,7 @@ class BrowserManager: ObservableObject {
     var compositorManager: TabCompositorManager
     var splitManager: SplitViewManager
     lazy var webNotificationManager = WebNotificationManager(browserManager: self)
+    lazy var messageArchiveManager = MessageArchiveManager(browserManager: self)
     var gradientColorManager: GradientColorManager
     var contentBlockerManager: ContentBlockerManager
     var sponsorBlockManager: SponsorBlockManager

@@ -184,6 +184,21 @@ final class MessageArchive {
 
     // MARK: - Reading
 
+    /// Of `ids`, the saved messages that have no media file yet.
+    func missingMedia(account: String, ids: [String]) throws -> [String] {
+        let statement = try prepare("SELECT 1 FROM messages WHERE account = ?1 AND id = ?2 AND media_path IS NULL AND view_once = 0")
+        defer { sqlite3_finalize(statement) }
+        return ids.filter { id in
+            sqlite3_reset(statement); bind(statement, 1, account); bind(statement, 2, id)
+            return sqlite3_step(statement) == SQLITE_ROW
+        }
+    }
+
+    /// Whether a file may be saved for this message: it is in the copy and not view-once.
+    func mediaAllowed(account: String, id: String) throws -> Bool {
+        try !missingMedia(account: account, ids: [id]).isEmpty
+    }
+
     /// Newest first. Words must all appear in the message text or file name; Arabic matches
     /// without marks or letter variants.
     func search(_ query: String, account: String? = nil, limit: Int = 50) throws -> [ArchivedMessage] {
@@ -309,6 +324,7 @@ final class MessageArchive {
             search_text TEXT NOT NULL DEFAULT '', people TEXT NOT NULL DEFAULT '', saved_at REAL, expires_at REAL,
             UNIQUE (account, id));
         CREATE INDEX IF NOT EXISTS messages_chat ON messages (account, chat_id, ts);
+        CREATE INDEX IF NOT EXISTS messages_expiry ON messages (expires_at) WHERE expires_at IS NOT NULL;
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5 (
             search_text, people, content = 'messages', content_rowid = 'rowid', tokenize = 'unicode61');
         CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN

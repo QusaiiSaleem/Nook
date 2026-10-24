@@ -76,6 +76,11 @@ public protocol PageSessionDelegate: AnyObject {
     func showWebNotification(_ payload: WebNotificationPayload, from session: PageSession)
     /// Removes a notification the page closed.
     func closeWebNotification(id: String, from session: PageSession)
+
+    // MARK: Message Archive
+
+    /// After a page finished loading: the local WhatsApp copy installs itself on WhatsApp pages.
+    func installMessageArchive(in webView: WKWebView, session: PageSession)
 }
 
 /// What a window's picture-in-picture (`BrowserWindowState.sidebarPiPStorage`) shows, so the tab

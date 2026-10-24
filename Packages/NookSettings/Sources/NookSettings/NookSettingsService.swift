@@ -66,6 +66,7 @@ public final class NookSettingsService {
     private let youTubeFrameThumbnailsKey = "settings.youTubeFrameThumbnails"
     private let youTubeNoHoverPreviewKey = "settings.youTubeNoHoverPreview"
     private let mediaDownloadSitesKey = "settings.mediaDownloadSites"
+    private let messageArchiveSpacesKey = "settings.messageArchiveSpaces"
     private let facebookHideReelsKey = "settings.facebookHideReels"
     private let facebookHideSuggestedKey = "settings.facebookHideSuggested"
     private let redditSortHotKey = "settings.redditSortHot"
@@ -435,6 +436,11 @@ public final class NookSettingsService {
         didSet { userDefaults.set(mediaDownloadSites, forKey: mediaDownloadSitesKey) }
     }
 
+    /// Spaces (ids) whose WhatsApp keeps a local copy on this Mac.
+    public var messageArchiveSpaces: [String] {
+        didSet { userDefaults.set(messageArchiveSpaces, forKey: messageArchiveSpacesKey) }
+    }
+
     /// Remove the Reels carousel from Facebook's news feed.
     public var facebookHideReels: Bool {
         didSet { userDefaults.set(facebookHideReels, forKey: facebookHideReelsKey) }
@@ -601,6 +607,7 @@ public final class NookSettingsService {
         self.youTubeFrameThumbnails = userDefaults.bool(forKey: youTubeFrameThumbnailsKey)
         self.youTubeNoHoverPreview = userDefaults.bool(forKey: youTubeNoHoverPreviewKey)
         self.mediaDownloadSites = userDefaults.stringArray(forKey: mediaDownloadSitesKey) ?? []
+        self.messageArchiveSpaces = userDefaults.stringArray(forKey: messageArchiveSpacesKey) ?? []
         self.facebookHideReels = userDefaults.bool(forKey: facebookHideReelsKey)
         self.facebookHideSuggested = userDefaults.bool(forKey: facebookHideSuggestedKey)
         self.redditSortHot = userDefaults.bool(forKey: redditSortHotKey)

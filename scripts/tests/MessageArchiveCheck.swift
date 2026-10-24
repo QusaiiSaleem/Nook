@@ -42,6 +42,7 @@ struct MessageArchiveCheck {
         try readme_written()
         try expired_messages_are_purged()
         try files_outside_the_media_folder_are_never_touched()
+        try media_bookkeeping()
         print("MessageArchiveCheck passed")
     }
 
@@ -127,6 +128,24 @@ struct MessageArchiveCheck {
         precondition((try? archive.finishMedia(account: "space-a", id: "m1", at: outside)) == nil, "a file outside media/ is refused")
         try archive.delete(account: "space-a", ids: ["m1"])
         precondition(FileManager.default.fileExists(atPath: outside.path), "a file outside media/ survives a delete")
+    }
+
+    /// Which files are still wanted, and that view-once media is never accepted.
+    static func media_bookkeeping() throws {
+        let (archive, _) = try fresh()
+        var once = message("vo1")
+        once.viewOnce = true
+        try archive.upsert([message("m1"), message("m2"), once])
+        let file = try archive.beginMedia(account: "space-a", id: "m1", fileName: "a.jpg")
+        try archive.finishMedia(account: "space-a", id: "m1", at: file)
+        let missing = try archive.missingMedia(account: "space-a", ids: ["m1", "m2", "nope"])
+        let allowed = try archive.mediaAllowed(account: "space-a", id: "m2")
+        let viewOnce = try archive.mediaAllowed(account: "space-a", id: "vo1")
+        let unknown = try archive.mediaAllowed(account: "space-a", id: "nope")
+        precondition(Set(missing) == ["m2"], "missing \(missing)")
+        precondition(allowed)
+        precondition(!viewOnce, "view-once media is refused")
+        precondition(!unknown, "unknown messages get no file")
     }
 
     static func readme_written() throws {

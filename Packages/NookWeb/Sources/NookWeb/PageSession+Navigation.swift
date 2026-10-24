@@ -116,6 +116,7 @@ extension PageSession: WKNavigationDelegate {
 
             // CHROME WEB STORE INTEGRATION: Inject script after navigation
             injectWebStoreScriptIfNeeded(for: newURL, in: webView)
+            controller?.sessionDelegate?.installMessageArchive(in: webView, session: self)
 
         }
 
