@@ -46,7 +46,10 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
         super.init()
     }
 
-    func run(url: URL, dark: Bool = true, timeout: TimeInterval = 20) async -> InspectReport {
+    /// `timeout` bounds the load; `workBudget` bounds everything after it, so the MCP call answers
+    /// before its own deadline with the widths it did not reach listed, never passed.
+    func run(url: URL, dark: Bool = true, timeout: TimeInterval = 20, network: String? = nil,
+             workBudget: TimeInterval = 30) async -> InspectReport {
         configuration.userContentController.addUserScript(InspectScripts.capture)
         // Tab reaches links too, so the focus check sees every control.
         if let preferences = configuration.preferences.copy() as? WKPreferences {
@@ -82,9 +85,15 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
 
         var report = InspectReport(
             url: url.absoluteString, finalURL: webView.url?.absoluteString ?? url.absoluteString, status: status,
-            partial: partial, network: nil, facts: [:], speed: [:], errors: [], failedLoads: [], findings: [],
+            partial: partial, network: network, facts: [:], speed: [:], errors: [], failedLoads: [], findings: [],
             unassessable: [], files: [])
         try? FileManager.default.createDirectory(at: outputFolder, withIntermediateDirectories: true)
+        let workDeadline = Date().addingTimeInterval(workBudget)
+        func inTime(_ step: String) -> Bool {
+            if Date() < workDeadline { return true }
+            report.unassessable.append("\(step): not checked, out of time")
+            return false
+        }
 
         // Many pages finish setting up on their first frames, so let them draw before measuring.
         await settle(webView)
@@ -97,8 +106,9 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
         report.speed = Self.speed(Self.object(await evaluate(webView, InspectScripts.speed)), facts: report.facts)
 
         var findings: [InspectFinding] = []
-        findings += await focusFindings(webView, window: window)
+        if inTime("keyboard focus") { findings += await focusFindings(webView, window: window) }
         for width in [1280, 390, 820, 1600] {
+            guard inTime("width \(width)") else { continue }
             resize(window, webView, width: width)
             await settle(webView)
             let audit = Self.object(await evaluate(webView, InspectScripts.audit(width: width, phone: width <= 820)))
@@ -115,7 +125,7 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
                 save(png, "full-\(width).png", into: &report)
             }
         }
-        if dark {
+        if dark, inTime("dark mode") {
             resize(window, webView, width: 1280)
             webView.appearance = NSAppearance(named: .darkAqua)
             await settle(webView)

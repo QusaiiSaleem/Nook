@@ -32,6 +32,7 @@ struct InspectRunnerCheck {
         NSApplication.shared.setActivationPolicy(.accessory)
         await runner_reports_one_call()
         await runner_gives_up_after_timeout()
+        await runner_stops_at_its_budget()
         print("InspectRunnerCheck passed")
     }
 
@@ -88,6 +89,24 @@ struct InspectRunnerCheck {
         precondition(report.partial, "a page that never finishes is partial")
         precondition(took < 6, "the call returned after \(took) s")
         listener.cancel()
+    }
+}
+
+extension InspectRunnerCheck {
+    /// A call out of time still answers: the widths it did not reach are listed, never passed.
+    @MainActor static func runner_stops_at_its_budget() async {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("irun-budget-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("page.html")
+        try! page.write(to: file, atomically: true, encoding: .utf8)
+        let out = folder.appendingPathComponent("out")
+        let runner = InspectRunner(configuration: WKWebViewConfiguration(), outputFolder: out)
+        let report = await runner.run(url: file, dark: true, timeout: 10, network: "slow3g", workBudget: 0)
+        precondition(report.network == "slow3g", "network \(String(describing: report.network))")
+        precondition(runner.screenshots.isEmpty, "screenshots taken after the budget: \(runner.screenshots.map(\.label))")
+        let skipped = report.unassessable.filter { $0.contains("out of time") }
+        precondition(skipped.contains { $0.contains("1280") } && skipped.contains { $0.contains("390") }, "skipped widths not listed: \(report.unassessable)")
+        precondition(FileManager.default.fileExists(atPath: out.appendingPathComponent("report.json").path), "no report.json")
     }
 }
 

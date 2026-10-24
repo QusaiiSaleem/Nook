@@ -170,10 +170,11 @@ final class DevMCPServer {
             let args = params["arguments"] as? [String: Any] ?? [:]
             // Counted here, not in callTool, so a call the deadline abandons stops the pulse.
             browserManager?.tabs.agentCallsInFlight += 1
-            let called = await withTimeout(Self.toolTimeout, operation: { await self.callTool(name, args) })
+            let limit = name == "inspect" ? DevMCPTesting.inspectTimeout : Self.toolTimeout
+            let called = await withTimeout(limit, operation: { await self.callTool(name, args) })
             browserManager?.tabs.agentCallsInFlight -= 1
             guard let called else {
-                return (200, rpcError(id: id, code: -32001, message: "Tool \(name) did not answer within \(Int(Self.toolTimeout))s"))
+                return (200, rpcError(id: id, code: -32001, message: "Tool \(name) did not answer within \(Int(limit))s"))
             }
             result = called
         default:
@@ -349,14 +350,16 @@ final class DevMCPServer {
     /// `executeJavaScript` is not advertised: over this server it is only an old name for
     /// `evaluate` (see callTool), and the chat's description of it is wrong for that behaviour.
     /// The alias stays so an agent registered against the old name keeps working.
-    private static let toolList: [[String: Any]] = (BrowserTools.allTools.filter { $0.name != "executeJavaScript" } + devTools).map {
+    private static let toolList: [[String: Any]] = (BrowserTools.allTools.filter { $0.name != "executeJavaScript" } + devTools
+        + DevMCPTesting.definitions).map {
         ["name": $0.name, "description": $0.description, "inputSchema": $0.parameters]
     }
 
     /// About the person's own page, so they act on the active window's tab, not the Agent space.
     private static let humanTools: Set<String> = ["pick", "selection"]
     /// Need no Agent page, so they neither create the Agent space nor load its tab.
-    private static let readOnlyTools: Set<String> = ["pages", "clear_page_cache", "check_urls", "getTabList"]
+    /// `inspect` loads its page in a window of its own.
+    private static let readOnlyTools: Set<String> = ["pages", "clear_page_cache", "check_urls", "getTabList", "inspect"]
 
     private var humanWindow: BrowserWindowState? {
         guard let registry = browserManager?.windowRegistry else { return nil }
@@ -719,6 +722,9 @@ final class DevMCPServer {
                 return text("Cleared \(views.count)")
 
             default:
+                if let answer = await DevMCPTesting.call(name, args, browserManager: bm, agentView: agentView, session: session) {
+                    return answer
+                }
                 return text("Unknown tool: \(name)", error: true)
             }
         } catch {
