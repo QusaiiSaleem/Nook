@@ -131,12 +131,16 @@ extension BrowserManager: PageSessionDelegate {
     func requestWebNotificationPermission(
         host: String, session: PageSession, completion: @escaping (SitePermissionPolicy) -> Void
     ) {
-        completion(.ask)
+        webNotificationManager.requestPermission(host: host, session: session, completion: completion)
     }
 
-    func showWebNotification(_ payload: WebNotificationPayload, from session: PageSession) {}
+    func showWebNotification(_ payload: WebNotificationPayload, from session: PageSession) {
+        webNotificationManager.show(payload, from: session)
+    }
 
-    func closeWebNotification(id: String, from session: PageSession) {}
+    func closeWebNotification(id: String, from session: PageSession) {
+        webNotificationManager.close(id: id, from: session)
+    }
 }
 
 // MARK: - TabEventObserver

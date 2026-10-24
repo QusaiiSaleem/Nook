@@ -392,6 +392,7 @@ class BrowserManager: ObservableObject {
     var extensionManager: ExtensionManager?
     var compositorManager: TabCompositorManager
     var splitManager: SplitViewManager
+    lazy var webNotificationManager = WebNotificationManager(browserManager: self)
     var gradientColorManager: GradientColorManager
     var contentBlockerManager: ContentBlockerManager
     var sponsorBlockManager: SponsorBlockManager
@@ -466,6 +467,8 @@ class BrowserManager: ObservableObject {
         // Phase 2: wire dependencies and perform side effects (safe to use self)
         self.compositorManager.browserManager = self
         self.splitManager.browserManager = self
+        // Created now so it is the notification-center delegate before any banner is clicked.
+        _ = self.webNotificationManager
         self.windowRegistry = windowRegistry
         // Note: settingsManager will be injected later, so we skip initialization here
         self.tabs.history = self.historyManager
@@ -961,6 +964,7 @@ class BrowserManager: ObservableObject {
         guard !windowState.isIncognito else { return }
         windowSpaceChanged(windowState)
         applyStartupLoadMode(for: windowState)
+        webNotificationManager.windowDidRegister()
         restoreSavedWindows()
     }
 
