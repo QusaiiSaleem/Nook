@@ -224,6 +224,8 @@ extension TabsController {
                 tabEvents?.tabActivated(new: session, previous: previous)
             }
         }
+        // Auto-archive: the tab left and the tab arrived were both just on screen.
+        setLastSeen([previous?.itemID, itemID].compactMap { $0 }, at: Date())
         mirror(window)
         window.refreshCompositor()
     }

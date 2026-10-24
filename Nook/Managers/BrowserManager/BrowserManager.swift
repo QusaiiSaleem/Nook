@@ -394,6 +394,9 @@ class BrowserManager: ObservableObject {
     var splitManager: SplitViewManager
     lazy var webNotificationManager = WebNotificationManager(browserManager: self)
     lazy var messageArchiveManager = MessageArchiveManager(browserManager: self)
+    /// Auto-archive's one pending check and its app-activation observer (BrowserManager+AutoArchive).
+    var autoArchiveTimer: Timer?
+    var autoArchiveObserver: NSObjectProtocol?
     var gradientColorManager: GradientColorManager
     var contentBlockerManager: ContentBlockerManager
     var sponsorBlockManager: SponsorBlockManager
@@ -971,6 +974,7 @@ class BrowserManager: ObservableObject {
         windowSpaceChanged(windowState)
         applyStartupLoadMode(for: windowState)
         webNotificationManager.windowDidRegister()
+        startAutoArchive()
         restoreSavedWindows()
     }
 

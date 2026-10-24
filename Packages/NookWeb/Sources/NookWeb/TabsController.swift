@@ -581,6 +581,15 @@ public final class TabsController {
 
     // MARK: - Device State Edits
 
+    /// Auto-archive's record of when Today tabs were last on screen (`device.lastSeen`).
+    func setLastSeen(_ itemIDs: [UUID], at date: Date) {
+        var seen = device.lastSeen ?? [:]
+        for id in itemIDs where tree.item(id)?.isFolder == false && tree.scope(of: id) == .device { seen[id] = date }
+        guard seen != (device.lastSeen ?? [:]) else { return }
+        device.lastSeen = seen
+        save()
+    }
+
     func setOpenPage(_ itemID: UUID, _ page: OpenPage?) {
         guard device.openPages[itemID] != page else { return }
         device.openPages[itemID] = page
