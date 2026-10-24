@@ -234,7 +234,13 @@ extension PageSession: WKUIDelegate {
         completionHandler: @escaping ([URL]?) -> Void
     ) {
 
-        guard !isAgentPage, let alerts = controller?.alerts else { return completionHandler(nil) }
+        if isAgentPage {
+            // The picker answers once with the files MCP `upload` named; with none it cancels.
+            let files = pendingUploadURLs.map { parameters.allowsMultipleSelection ? $0 : Array($0.prefix(1)) }
+            pendingUploadURLs = nil
+            return completionHandler(files)
+        }
+        guard let alerts = controller?.alerts else { return completionHandler(nil) }
         alerts.presentOpenPanel(
             allowsMultipleSelection: parameters.allowsMultipleSelection,
             allowsDirectories: parameters.allowsDirectories,

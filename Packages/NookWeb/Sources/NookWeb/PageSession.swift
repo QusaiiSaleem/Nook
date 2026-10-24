@@ -180,6 +180,8 @@ public final class PageSession: NSObject, Identifiable {
     @ObservationIgnored public var onLinkHover: ((String?) -> Void)? = nil
     @ObservationIgnored public var onCommandHover: ((String?) -> Void)? = nil
     @ObservationIgnored public var pendingContextMenuPayload: WebContextMenuPayload?
+    /// Files MCP `upload` named for this agent page's next file picker.
+    @ObservationIgnored public var pendingUploadURLs: [URL]?
 
     // MARK: - OAuth Flow State
 
