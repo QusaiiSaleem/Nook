@@ -166,9 +166,9 @@ class TabCompositorManager: ObservableObject {
             return
         }
         session.clearPageCache()
-        // Pinned tabs and favorites are never unloaded automatically, so re-arming would only
-        // wake the app.
-        if isPinned(itemID) { return }
+        // A page kept running for its alerts is never unloaded automatically, so re-arming would
+        // only wake the app.
+        if tabs?.keepsRunningOffscreen(itemID) == true { return }
 
         let remaining = mode.unloadTimeout - idle
         if remaining > 1 {
@@ -192,21 +192,18 @@ class TabCompositorManager: ObservableObject {
         }
     }
 
-    /// Shared eligibility for automatic eviction and bulk hidden-page unloading. A user
-    /// unloading one page deliberately bypasses this policy.
+    /// Shared eligibility for automatic eviction and bulk hidden-page unloading (see
+    /// `IdleUnloadPolicy`). A user unloading one page deliberately bypasses this policy.
     func canUnloadInactive(_ session: PageSession) -> Bool {
-        guard let tabs, !session.isUnloaded, !tabs.isOnScreen(session.itemID) else { return false }
-        // A silent video nobody can see is not a reason to keep a page: news sites loop muted
-        // clips forever. Audible media and picture-in-picture are.
-        if session.hasPiPActive || session.hasPlayingAudio || session.hasAudioContent {
-            return false
-        }
+        guard let tabs, !session.isUnloaded else { return false }
         var views = browserManager?.webViewCoordinator?.getAllWebViews(for: session.itemID) ?? []
         if let primary = session.webView { views.append(primary) }
-        if views.contains(where: { $0.cameraCaptureState != .none || $0.microphoneCaptureState != .none }) {
-            return false
-        }
-        return !isPinned(session.itemID)
+        return IdleUnloadPolicy.mayUnload(
+            onScreen: tabs.isOnScreen(session.itemID),
+            audible: session.hasPlayingAudio || session.hasAudioContent,
+            pictureInPicture: session.hasPiPActive,
+            capturing: views.contains { $0.cameraCaptureState != .none || $0.microphoneCaptureState != .none },
+            keepsRunningForAlerts: tabs.keepsRunningOffscreen(session.itemID))
     }
 
     /// Higher keeps the page longer.
@@ -304,7 +301,7 @@ class TabCompositorManager: ObservableObject {
         budgetRetryTimer = nil
         guard let maxTabs = mode.maxLoadedTabs, let sessions = tabs?.sessions else { return }
 
-        // canUnloadInactive already leaves pinned tabs and favorites out of the count.
+        // canUnloadInactive already leaves pages kept running for alerts out of the count.
         let loaded = sessions.filter(canUnloadInactive)
         // Logged either way: silence here would be ambiguous between a cap that never binds and
         // code that never runs, which is exactly what made an earlier measurement useless.
