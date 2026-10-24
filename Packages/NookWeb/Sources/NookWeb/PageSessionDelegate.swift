@@ -10,6 +10,7 @@
 
 import Combine
 import WebKit
+import NookSettings
 
 @MainActor
 public protocol PageSessionDelegate: AnyObject {
@@ -66,6 +67,15 @@ public protocol PageSessionDelegate: AnyObject {
     /// retain for the life of the page, or nil when the URL is not a store page.
     func installWebStoreScript(in webView: WKWebView) -> AnyObject?
     func removeWebStoreHandler(from controller: WKUserContentController)
+
+    // MARK: Web Notifications
+
+    /// Asks the person whether `host` may show notifications, stores the answer, and reports it.
+    func requestWebNotificationPermission(host: String, session: PageSession, completion: @escaping (SitePermissionPolicy) -> Void)
+    /// Shows a notification the page created. The bridge has already checked the permission.
+    func showWebNotification(_ payload: WebNotificationPayload, from session: PageSession)
+    /// Removes a notification the page closed.
+    func closeWebNotification(id: String, from session: PageSession)
 }
 
 /// What a window's picture-in-picture (`BrowserWindowState.sidebarPiPStorage`) shows, so the tab

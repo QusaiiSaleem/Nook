@@ -404,6 +404,7 @@ public final class PageSession: NSObject, Identifiable {
         webView.isInspectable = true
         webView.allowsLinkPreview = true
         webView.configuration.preferences.isFraudulentWebsiteWarningEnabled = true
+        WebNotificationBridge.install(on: webView, session: self)
     }
 
     /// Installs a WebKit-created popup view as this session's primary view. WebKit drives the

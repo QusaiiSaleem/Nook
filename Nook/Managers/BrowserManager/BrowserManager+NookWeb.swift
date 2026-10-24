@@ -11,6 +11,7 @@
 import AppKit
 import Combine
 import WebKit
+import NookSettings
 import NookWeb
 
 // MARK: - WebViewProvider
@@ -124,6 +125,18 @@ extension BrowserManager: PageSessionDelegate {
         controller.removeScriptMessageHandler(
             forName: WebStoreScriptHandler.handlerName, contentWorld: WebStoreScriptHandler.contentWorld)
     }
+
+    // MARK: Web Notifications
+
+    func requestWebNotificationPermission(
+        host: String, session: PageSession, completion: @escaping (SitePermissionPolicy) -> Void
+    ) {
+        completion(.ask)
+    }
+
+    func showWebNotification(_ payload: WebNotificationPayload, from session: PageSession) {}
+
+    func closeWebNotification(id: String, from session: PageSession) {}
 }
 
 // MARK: - TabEventObserver
