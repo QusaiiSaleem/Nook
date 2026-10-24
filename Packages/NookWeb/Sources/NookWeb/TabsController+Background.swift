@@ -10,12 +10,17 @@
 
 import Foundation
 import NookSettings
+import WebKit
 import NookTabsCore
 
 extension TabsController {
     /// Whether this item's page stays loaded when the last window showing it closes.
     public func keepsRunningOffscreen(_ itemID: UUID) -> Bool {
         guard case .main = owner(ofItem: itemID) else { return false }
+        // A page using the camera or microphone stops with its window, as before: nobody could
+        // see what it is capturing once no window shows it.
+        if let view = session(for: itemID)?.webView,
+           view.cameraCaptureState != .none || view.microphoneCaptureState != .none { return false }
         let url = session(for: itemID)?.url ?? device.openPages[itemID]?.url
         return WebNotificationPolicy.keepsRunning(
             isSynced: tree.scope(of: itemID) == .synced, url: url,

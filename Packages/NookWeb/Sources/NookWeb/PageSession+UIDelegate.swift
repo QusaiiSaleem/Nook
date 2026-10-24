@@ -305,8 +305,10 @@ extension PageSession: WKUIDelegate {
         }
         let policies = needed.map { settings.permission($0, for: origin.host) }
         // A combined request needs every part allowed, and one block denies the whole thing.
-        // No capture prompt for an agent page: nobody may be watching it.
-        if policies.contains(.block) || (isAgentPage && !policies.allSatisfy({ $0 == .allow })) {
+        // No capture prompt for an agent page: nobody may be watching it. A page in no window
+        // (a background tab, or a favorite kept running offscreen) never starts capture either.
+        if policies.contains(.block) || (isAgentPage && !policies.allSatisfy({ $0 == .allow }))
+            || (webView.window == nil && !isAgentPage) {
             decisionHandler(.deny)
         } else if policies.allSatisfy({ $0 == .allow }) {
             decisionHandler(.grant)
