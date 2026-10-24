@@ -29,6 +29,8 @@ public struct SpaceTab: View {
 
     @Environment(TabsController.self) private var tabs
     private var session: PageSession? { tabs.session(for: item.id) }
+    /// Favorites and pinned tabs only: any site may put "(1)" in a title.
+    private var unreadCount: Int? { tabs.isSynced(item.id) ? session?.unreadCount : nil }
     private var isRenaming: Bool { renameState.itemID == item.id }
     private var isUnloaded: Bool { session?.isUnloaded ?? true }
 
@@ -128,12 +130,15 @@ public struct SpaceTab: View {
                         // Only a rename animates; a page changing its own title swaps without motion.
                         .animation(NookDesign.Motion.spring, value: item.customTitle)
                         // On hover the text ends before the close button.
-                        .nookTrailingFade(reserving: isHovering ? NookDesign.Size.row + (showsReset ? NookDesign.Size.rowButton : 0) : 0)
+                        .nookTrailingFade(reserving: isHovering ? NookDesign.Size.row + (showsReset ? NookDesign.Size.rowButton : 0)
+                                          : (unreadCount != nil ? NookDesign.Size.row : 0))
                         .textSelection(.disabled)
                 }
             }
             .overlay(alignment: .trailing) {
-                if isHovering {
+                if !isHovering, let unreadCount {
+                    UnreadBadge(count: unreadCount)
+                } else if isHovering {
                     HStack(spacing: 0) {
                         // Resets a pinned tab whose page left its pinned URL; sits left of close and fades in with it.
                         if showsReset {

@@ -11,6 +11,7 @@
 import AppKit
 import NookSettings
 import NookWeb
+import Observation
 import OSLog
 import UserNotifications
 
@@ -29,6 +30,24 @@ final class WebNotificationManager: NSObject, UNUserNotificationCenterDelegate {
         self.browserManager = browserManager
         super.init()
         UNUserNotificationCenter.current().delegate = self
+        trackDockBadge()
+    }
+
+    // MARK: - Dock
+
+    private var dockCount = 0
+
+    /// The Dock shows the WhatsApp unread total. Observation re-arms on every change to the
+    /// pages or their titles, so there is no timer.
+    private func trackDockBadge() {
+        let total = withObservationTracking {
+            browserManager.tabs.whatsAppUnreadTotal
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.trackDockBadge() }
+        }
+        guard total != dockCount else { return }
+        dockCount = total
+        NSApp.dockTile.badgeLabel = total > 0 ? "\(total)" : nil
     }
 
     // MARK: - Permission

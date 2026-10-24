@@ -49,6 +49,15 @@ struct SpacesListItem: View {
             }
         } label: {
             spaceDot
+                .overlay(alignment: .topTrailing) {
+                    // A favorite or pinned page in this space has unread messages.
+                    if !isActive, tabs.spaceHasUnread(space.id) {
+                        Circle()
+                            .fill(NookDesign.Surface.danger)
+                            .frame(width: NookDesign.Spacing.xs, height: NookDesign.Spacing.xs)
+                            .offset(x: NookDesign.Spacing.xxs, y: -NookDesign.Spacing.xxs)
+                    }
+                }
         }
         .labelStyle(.iconOnly)
         .buttonStyle(NookIconButtonStyle(size: buttonSize))

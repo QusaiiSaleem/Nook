@@ -187,6 +187,7 @@ private struct PinnedTile: View {
                 isUnloaded: session?.isUnloaded ?? true,
                 hasLeftPinnedURL: tabs.hasLeftHome(item.id),
                 onResetToPinnedURL: { tabs.resetToHome(item.id) },
+                unreadCount: session?.unreadCount,
                 action: {
                     FavoritePreview.shared.dismiss()
                     tabs.select(item.id, in: windowState)

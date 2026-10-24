@@ -10,8 +10,9 @@
 import Foundation
 
 extension PageSession {
-    /// The unread count in this page's title, or nil.
-    public var unreadCount: Int? { UnreadCount.parse(title) }
+    /// The unread count in this page's title, or nil. An unloaded page keeps its last title, so
+    /// it has no count.
+    public var unreadCount: Int? { isUnloaded ? nil : UnreadCount.parse(title) }
 }
 
 extension TabsController {
@@ -27,7 +28,7 @@ extension TabsController {
     /// The unread total across WhatsApp pages, for the Dock.
     public var whatsAppUnreadTotal: Int {
         sessions.reduce(0) { total, session in
-            guard !session.isPrivate, !session.isAgentPage, session.url.host?.lowercased() == "web.whatsapp.com"
+            guard session.url.host?.lowercased() == "web.whatsapp.com", !session.isPrivate, !session.isAgentPage
             else { return total }
             return total + (session.unreadCount ?? 0)
         }

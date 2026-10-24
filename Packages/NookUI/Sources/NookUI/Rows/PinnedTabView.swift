@@ -18,6 +18,8 @@ public struct PinnedTabView<Icon: View>: View {
     /// The favorite's open page has left its pinned URL; hovering shows a reset button.
     var hasLeftPinnedURL: Bool = false
     var onResetToPinnedURL: () -> Void = {}
+    /// The page's unread count, shown in the corner unless the reset button holds it.
+    var unreadCount: Int? = nil
     var action: () -> Void
 
     @State private var isHovered: Bool = false
@@ -30,6 +32,7 @@ public struct PinnedTabView<Icon: View>: View {
         isUnloaded: Bool = false,
         hasLeftPinnedURL: Bool = false,
         onResetToPinnedURL: @escaping () -> Void = {},
+        unreadCount: Int? = nil,
         action: @escaping () -> Void
     ) {
         self.tabName = tabName
@@ -39,6 +42,7 @@ public struct PinnedTabView<Icon: View>: View {
         self.isUnloaded = isUnloaded
         self.hasLeftPinnedURL = hasLeftPinnedURL
         self.onResetToPinnedURL = onResetToPinnedURL
+        self.unreadCount = unreadCount
         self.action = action
     }
 
@@ -65,6 +69,9 @@ public struct PinnedTabView<Icon: View>: View {
                     .buttonStyle(.plain)
                     .help("Reset to Pinned URL")
                     .padding(NookDesign.Spacing.xxs)
+                } else if let unreadCount {
+                    UnreadBadge(count: unreadCount)
+                        .padding(NookDesign.Spacing.xxs)
                 }
             }
             .frame(maxWidth: .infinity)
