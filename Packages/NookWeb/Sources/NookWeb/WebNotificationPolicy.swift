@@ -39,6 +39,17 @@ public enum WebNotificationPolicy {
         }
     }
 
+    /// Notifications need a secure page, as in browsers: https, or http on this Mac. Answers are
+    /// stored per host, so without this a forged plain-http copy of a site would inherit them.
+    public static func isSecure(scheme: String, host: String) -> Bool {
+        guard !host.isEmpty else { return false }
+        switch scheme.lowercased() {
+        case "https": return true
+        case "http": return ["localhost", "127.0.0.1", "::1"].contains(host.lowercased())
+        default: return false
+        }
+    }
+
     /// Whether a notification may reach macOS right now.
     public static func mayShow(stored: SitePermissionPolicy, isPrivateOrAgent: Bool) -> Bool {
         !isPrivateOrAgent && stored == .allow

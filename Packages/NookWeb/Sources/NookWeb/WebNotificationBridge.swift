@@ -58,13 +58,14 @@ final class WebNotificationBridge: NSObject, WKScriptMessageHandlerWithReply {
         guard message.name == WebNotificationScripts.handlerName,
               message.world == WebNotificationScripts.relayWorld,
               message.frameInfo.isMainFrame,
-              origin.protocol == "https" || origin.protocol == "http", !origin.host.isEmpty,
               let session, let tabs = session.controller,
               let body = message.body as? [String: Any], let kind = body["kind"] as? String
         else { return replyHandler(nil, nil) }
 
         let host = SitePermissionRecord.key(for: origin.host)
+        // An insecure page reads as private: always "denied", never a prompt or a banner.
         let shielded = session.isPrivate || session.isAgentPage
+            || !WebNotificationPolicy.isSecure(scheme: origin.protocol, host: origin.host)
         let stored = tabs.settings.permission(.notifications, for: host)
 
         switch kind {

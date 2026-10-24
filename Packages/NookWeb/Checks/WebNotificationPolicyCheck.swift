@@ -37,6 +37,15 @@ struct WebNotificationPolicyCheck {
         precondition(!WebNotificationPolicy.mayShow(stored: .ask, isPrivateOrAgent: false))
         precondition(!WebNotificationPolicy.mayShow(stored: .allow, isPrivateOrAgent: true))
 
+        // Only secure pages may use notifications, as in browsers: a plain-http copy of a site
+        // (which a network can forge) must not inherit the https site's answer.
+        precondition(WebNotificationPolicy.isSecure(scheme: "https", host: "web.whatsapp.com"))
+        precondition(!WebNotificationPolicy.isSecure(scheme: "http", host: "web.whatsapp.com"))
+        precondition(WebNotificationPolicy.isSecure(scheme: "http", host: "localhost"))
+        precondition(WebNotificationPolicy.isSecure(scheme: "http", host: "127.0.0.1"))
+        precondition(!WebNotificationPolicy.isSecure(scheme: "file", host: ""))
+        precondition(!WebNotificationPolicy.isSecure(scheme: "https", host: ""))
+
         // Requests arriving while a prompt is open for the same site join it.
         var prompts = WebNotificationPrompts<Int>()
         precondition(prompts.add(1, for: "web.whatsapp.com"), "the first request opens a prompt")
