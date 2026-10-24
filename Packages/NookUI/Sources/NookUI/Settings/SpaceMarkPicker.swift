@@ -4,20 +4,20 @@
 //  Nook
 //
 //  Sets a space's mark from Settings > Spaces: an emoji typed or pasted (the character viewer
-//  works too), or an SVG file of at most 64 KB. The mark replaces the space's dot in the switcher.
+//  works too), or an SVG file. Choosing the file is the Settings page's job (`onChooseSVG`): a
+//  file panel opened from inside this popover could close the popover before the file came back.
 //
 
 import NookDesign
 import NookTabsCore
 import NookWeb
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct SpaceMarkPicker: View {
     @Environment(TabsController.self) private var tabs
     let space: SpaceRecord
+    let onChooseSVG: () -> Void
     @State private var emojiText = ""
-    @State private var importing = false
     @State private var problem: String?
     private let width: CGFloat = 220
 
@@ -25,16 +25,17 @@ struct SpaceMarkPicker: View {
         VStack(alignment: .leading, spacing: NookDesign.Spacing.md) {
             TextField("Emoji", text: $emojiText)
                 .onChange(of: emojiText) { _, text in
-                    guard !text.isEmpty else { return }
+                    guard !text.isEmpty else { problem = nil; return }
+                    // Cleared only once taken, so text an input method is still composing stays.
                     if let mark = SpaceMark.emoji(from: text) {
                         tabs.setSpaceMark(space.id, mark: mark)
                         problem = nil
+                        emojiText = ""
                     } else {
                         problem = "Type or paste one emoji."
                     }
-                    emojiText = ""
                 }
-            Button("Choose SVG…", systemImage: "square.and.arrow.down") { importing = true }
+            Button("Choose SVG…", systemImage: "square.and.arrow.down", action: onChooseSVG)
             if tabs.space(space.id)?.mark != nil {
                 Button("Remove Mark", systemImage: "xmark.circle", role: .destructive) {
                     tabs.setSpaceMark(space.id, mark: nil)
@@ -47,16 +48,5 @@ struct SpaceMarkPicker: View {
             }
         }
         .frame(width: width, alignment: .leading)
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.svg]) { result in
-            guard case .success(let url) = result else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url), let mark = SpaceMark.svg(from: data) else {
-                problem = "Choose an SVG of at most 64 KB."
-                return
-            }
-            tabs.setSpaceMark(space.id, mark: mark)
-            problem = nil
-        }
     }
 }
