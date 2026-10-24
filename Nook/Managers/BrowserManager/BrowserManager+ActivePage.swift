@@ -107,6 +107,7 @@ extension BrowserManager {
     /// An Escape the page left alone (`EscapeKey`). Closes the innermost thing the window shows:
     /// a page's own full screen, then Peek. The window itself stays as it is.
     func escapePressed(in nsWindow: NSWindow) {
+        if AreaCaptureHost.cancel(in: nsWindow) { return }
         guard let state = windowRegistry?.windows.values.first(where: { $0.window === nsWindow }) else { return }
         let peek = peekManager.windowId == state.id ? peekManager.page : nil
         let shown = [peek, tabs.selectedSession(in: state)]

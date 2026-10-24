@@ -71,6 +71,14 @@ struct AutoArchiveTests {
         #expect(AutoArchive.nextDeadline(in: f.tree, lastSeen: [:], keep: []) == nil)
     }
 
+    /// Tabs shown by windows not reopened yet (saved window records) count as on screen.
+    @Test func windowRecordsKeepTheirShownTabs() {
+        let space = UUID(), shown = UUID(), other = UUID(), left = UUID(), right = UUID()
+        let record = WindowRecord(id: UUID(), spaceID: space, selectedItemBySpace: [space: shown, UUID(): other],
+                                  split: SplitRecord(leftItemID: left, rightItemID: right, fraction: 0.5))
+        #expect(AutoArchive.shownBy([record]) == [shown, left, right])
+    }
+
     @Test func lastSeenSurvivesSavingAndOlderFilesLoad() throws {
         var device = DeviceState()
         let id = UUID()

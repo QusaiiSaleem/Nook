@@ -397,6 +397,7 @@ class BrowserManager: ObservableObject {
     /// Auto-archive's one pending check and its app-activation observer (BrowserManager+AutoArchive).
     var autoArchiveTimer: Timer?
     var autoArchiveObserver: NSObjectProtocol?
+    var autoArchiveReady = false
     var gradientColorManager: GradientColorManager
     var contentBlockerManager: ContentBlockerManager
     var sponsorBlockManager: SponsorBlockManager

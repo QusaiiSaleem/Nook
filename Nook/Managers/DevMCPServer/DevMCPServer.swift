@@ -412,6 +412,8 @@ final class DevMCPServer {
             // The agent's page, loaded and hosted once for this call; a read-only tool loads nothing.
             let agentView: WKWebView? = forPerson || Self.readOnlyTools.contains(name) || agentSpace == nil
                 ? nil : try bm.agentWebView()
+            // A page that slept while the agent was idle reloads first; wait for it (bounded).
+            if let agentView, agentView.isLoading { _ = await BrowserManager.waitForStartupNavigation(agentView) }
             var webView: WKWebView? {
                 if !forPerson { return agentView }
                 guard let id = window.selectedItemID else { return nil }

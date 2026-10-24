@@ -17,6 +17,17 @@ public enum AutoArchive {
             .map(\.id)
     }
 
+    /// Tabs saved window records show: the selection in each record's space and its split pair.
+    /// Windows reopened after launch must not find their tab archived.
+    public static func shownBy(_ windows: [WindowRecord]) -> Set<UUID> {
+        var shown = Set<UUID>()
+        for window in windows {
+            if let space = window.spaceID, let selected = window.selectedItemBySpace[space] { shown.insert(selected) }
+            if let split = window.split { shown.formUnion([split.leftItemID, split.rightItemID]) }
+        }
+        return shown
+    }
+
     /// When the next tab becomes stale, so one timer can wait for it.
     public static func nextDeadline(in tree: TabTree, lastSeen: [UUID: Date], keep: Set<UUID>) -> Date? {
         candidates(in: tree, lastSeen: lastSeen, keep: keep).map { $0.seen.addingTimeInterval(maxAge) }.min()

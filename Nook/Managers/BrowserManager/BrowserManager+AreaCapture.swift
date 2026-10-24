@@ -30,10 +30,12 @@ extension BrowserManager {
         let host = AreaCaptureHost(rootView: AreaCaptureView(session: capture))
         host.frame = webView.bounds
         host.autoresizingMask = [.width, .height]
-        host.onEscape = { [weak host] in host?.removeFromSuperview() }
-        capture.onFinish = { [weak self, weak host] (result: AreaCaptureSession.Result) in
-            host?.removeFromSuperview()
-            self?.finishAreaCapture(result, session: session, webView: webView, windowState: windowState)
+        host.onCancel = { [weak host] in host?.removeFromSuperview() }
+        // Weak: a capture left open when its tab or window closes must not keep the page alive.
+        capture.onFinish = { [weak self, weak host, weak webView, weak session] (result: AreaCaptureSession.Result) in
+            host?.cancel()
+            guard let self, let webView, let session else { return }
+            self.finishAreaCapture(result, session: session, webView: webView, windowState: windowState)
         }
         webView.addSubview(host)
         webView.window?.makeFirstResponder(host)

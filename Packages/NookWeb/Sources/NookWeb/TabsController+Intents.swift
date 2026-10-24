@@ -332,7 +332,13 @@ extension TabsController {
         remove(itemID, promotingChildren: false)
     }
 
-    private func remove(_ itemID: UUID, promotingChildren: Bool) {
+    /// Auto-archive's close: children move up as with a closed tab, and Reopen Closed Tab keeps
+    /// the person's own closes (archived tabs are written to History instead).
+    func archive(_ itemID: UUID) {
+        remove(itemID, promotingChildren: true, recording: false)
+    }
+
+    private func remove(_ itemID: UUID, promotingChildren: Bool, recording: Bool = true) {
         guard let owner = owner(ofItem: itemID) else { return }
         let ids = promotingChildren ? [itemID] : tree(owner).subtree(of: itemID)
         if let item = tree(owner).item(itemID) { dismissFromLiveFolder(item) }
@@ -345,6 +351,7 @@ extension TabsController {
         }
         guard change != nil, let closedEntry else { return }
         for id in ids { endSession(id) }
+        guard recording else { return }
         switch owner {
         case .main:
             recordClosed(closedEntry)

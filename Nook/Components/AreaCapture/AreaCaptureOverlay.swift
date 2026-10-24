@@ -37,6 +37,8 @@ final class AreaCaptureSession {
     var draft: CaptureMark?
     var tool = Tool.arrow
     @ObservationIgnored private var hoverInFlight = false
+    /// The latest pointer position while a lookup runs, asked next so the outline never lags.
+    @ObservationIgnored private var pendingHover: CGPoint?
 
     init(snapshot: CGImage, scale: CGFloat, size: CGSize, webView: WKWebView) {
         self.snapshot = snapshot
@@ -47,7 +49,8 @@ final class AreaCaptureSession {
 
     /// The element under `point` on the live page, outlined while the pointer rests there.
     func hover(at point: CGPoint) {
-        guard stage == .selecting, drag == nil, !hoverInFlight, let webView else { return }
+        guard stage == .selecting, drag == nil, let webView else { return }
+        guard !hoverInFlight else { return pendingHover = point }
         hoverInFlight = true
         let zoom = webView.pageZoom
         webView.callAsyncJavaScript(
@@ -62,10 +65,17 @@ final class AreaCaptureSession {
         ) { [weak self] result in
             guard let self else { return }
             self.hoverInFlight = false
-            guard case .success(let value) = result, let r = value as? [Double], r.count == 4 else { return self.hover = nil }
-            let rect = CGRect(x: r[0] * zoom, y: r[1] * zoom, width: r[2] * zoom, height: r[3] * zoom)
-                .intersection(CGRect(origin: .zero, size: self.size))
-            self.hover = rect.isEmpty ? nil : rect
+            if case .success(let value) = result, let r = value as? [Double], r.count == 4 {
+                let rect = CGRect(x: r[0] * zoom, y: r[1] * zoom, width: r[2] * zoom, height: r[3] * zoom)
+                    .intersection(CGRect(origin: .zero, size: self.size))
+                self.hover = rect.isEmpty ? nil : rect
+            } else {
+                self.hover = nil
+            }
+            if let next = self.pendingHover {
+                self.pendingHover = nil
+                self.hover(at: next)
+            }
         }
     }
 
@@ -90,13 +100,51 @@ final class AreaCaptureSession {
     }
 }
 
-/// Hosts the overlay over a web view and takes Escape.
+/// Hosts the overlay over a web view. Input stays out of the live page under the picture, so
+/// what the person frames is what they see; the capture ends if the page leaves its window or
+/// changes size.
 final class AreaCaptureHost: NSHostingView<AreaCaptureView> {
-    var onEscape: () -> Void = {}
-    override var acceptsFirstResponder: Bool { true }
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { onEscape() } else { super.keyDown(with: event) }
+    private static let hosts = NSHashTable<AreaCaptureHost>.weakObjects()
+    var onCancel: () -> Void = {}
+    private var settledSize: CGSize?
+    private var cancelled = false
+
+    /// Ends any capture over a page in `window` (`BrowserManager.escapePressed`). True if one was open.
+    static func cancel(in window: NSWindow) -> Bool {
+        let open = hosts.allObjects.filter { $0.window === window }
+        open.forEach { $0.cancel() }
+        return !open.isEmpty
     }
+
+    func cancel() {
+        guard !cancelled else { return }
+        cancelled = true
+        onCancel()
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { return cancel() }
+        Self.hosts.add(self)
+        settledSize = frame.size
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if let settledSize, settledSize != newSize { cancel() }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { cancel() }
+    }
+    override func scrollWheel(with event: NSEvent) {}
+    override func magnify(with event: NSEvent) {}
+    override func smartMagnify(with event: NSEvent) {}
+    override func swipe(with event: NSEvent) {}
+    override func rightMouseDown(with event: NSEvent) {}
+    override func otherMouseDown(with event: NSEvent) {}
 }
 
 struct AreaCaptureView: View {
