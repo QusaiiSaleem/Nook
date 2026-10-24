@@ -31,11 +31,7 @@ extension BrowserManager {
                 downloadManager.saveCompletedFile(png, suggestedFilename: Self.captureFilename(for: session), originalURL: session.url, from: webView.window)
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setData(png, forType: .png)
-                windowState.copyToastText = "Full page captured"
-                windowState.isShowingCopyURLToast = true
-                try? await Task.sleep(for: .seconds(2))
-                windowState.isShowingCopyURLToast = false
-                windowState.copyToastText = nil
+                showCaptureToast("Full page captured", in: windowState)
             } catch {
                 Self.captureLog.error("Capture failed: \(String(describing: error), privacy: .public)")
             }
@@ -70,7 +66,18 @@ extension BrowserManager {
         return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }
 
-    private static func captureFilename(for session: PageSession) -> String {
+    /// The window's toast for two seconds, as Copy Link shows it.
+    func showCaptureToast(_ text: String, in windowState: BrowserWindowState) {
+        Task { @MainActor in
+            windowState.copyToastText = text
+            windowState.isShowingCopyURLToast = true
+            try? await Task.sleep(for: .seconds(2))
+            windowState.isShowingCopyURLToast = false
+            windowState.copyToastText = nil
+        }
+    }
+
+    static func captureFilename(for session: PageSession) -> String {
         let name = session.title.isEmpty ? (session.url.host ?? "Page") : session.title
         let stamp = Date().formatted(.dateTime.year().month(.twoDigits).day(.twoDigits).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).second(.twoDigits))
         return "\(name) \(stamp.replacingOccurrences(of: ":", with: ".")).png"

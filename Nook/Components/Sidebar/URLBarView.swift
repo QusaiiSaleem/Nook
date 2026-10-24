@@ -80,13 +80,17 @@ struct URLBarView: View {
 
                     // Capture and copy link buttons (show on hover when tab is selected)
                     if isHovering, let session {
-                        Button("Capture Full Page", systemImage: "camera.viewfinder") {
-                            browserManager.captureFullPage(in: windowState)
+                        Menu {
+                            Button("Capture Full Page") { browserManager.captureFullPage(in: windowState) }
+                            Button("Capture Area") { browserManager.captureArea(in: windowState) }
+                        } label: {
+                            Image(systemName: "camera.viewfinder")
                         }
-                        .labelStyle(.iconOnly)
+                        .menuStyle(.button)
+                        .menuIndicator(.hidden)
                         .buttonStyle(NookIconButtonStyle(size: NookDesign.Size.iconButton, radius: NookDesign.Radius.sm))
                         .foregroundStyle(Color.primary)
-                        .help("Capture Full Page")
+                        .fixedSize()
                         .transition(.opacity.combined(with: .scale(scale: 0.9)))
 
                         Button("Copy Link", systemImage: showCheckmark ? "checkmark" : "link") {

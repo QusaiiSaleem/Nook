@@ -155,6 +155,7 @@ public enum NookDesign {
         /// Destructive action fill. Kept at the value the dialog buttons shipped with.
         public static let danger = Color(hex: "#F60000")
         public static let scrim = Color.black.opacity(0.4)                 // modal dimming behind a dialog
+        public static let captureHighlight = Color(hex: "#FFD800").opacity(0.35) // Capture Area's highlighter stroke
         public static let privateTint = Color(red: 0.36, green: 0.22, blue: 0.62).opacity(0.38) // private window chrome
         /// The neutral accent a private window's chrome uses in place of a space's. Keep in step
         /// with `SpaceGradient.incognito`, which is the persisted form of the same color.
