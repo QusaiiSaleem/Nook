@@ -15,6 +15,11 @@ extension PageSession {
     public var unreadCount: Int? { isUnloaded ? nil : UnreadCount.parse(title) }
 }
 
+extension PageSession {
+    /// The person pressed a key in this page; cleared when the next page commits.
+    public func noteTyping() { hasTypedSinceLoad = true }
+}
+
 extension TabsController {
     /// Whether a favorite or pinned page in this space shows an unread count. Tabs in the tabs
     /// section do not count: any site may put "(1)" in a title.

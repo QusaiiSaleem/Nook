@@ -26,6 +26,12 @@ final class FocusableWKWebView: WKWebView, SessionWebView {
         contextMenuBridge = nil
     }
 
+    override func keyDown(with event: NSEvent) {
+        // Typed text lives only in the loaded page, so it stays loaded when idle (IdleUnloadPolicy).
+        owningSession?.noteTyping()
+        super.keyDown(with: event)
+    }
+
     override func mouseDown(with event: NSEvent) {
         // Store Option key state for Peek functionality
         owningSession?.isOptionKeyDown = event.modifierFlags.contains(.option)

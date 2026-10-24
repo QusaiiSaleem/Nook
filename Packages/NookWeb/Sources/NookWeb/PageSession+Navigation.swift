@@ -49,6 +49,7 @@ extension PageSession: WKNavigationDelegate {
         didCommit navigation: WKNavigation!
     ) {
         loadingState = .didCommit
+        hasTypedSinceLoad = false
         pdfLoadStateChanged(webView)
         if let capture = devCapture {
             capture.reset()

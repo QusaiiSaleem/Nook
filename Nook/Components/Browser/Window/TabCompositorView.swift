@@ -9,9 +9,11 @@ import NookWeb
 // MARK: - Tab Compositor Manager
 
 /// Unloads pages no window shows: idle timeout, loaded-page budget, memory pressure and app
-/// backgrounding, per the tab management mode. Visible panes, audible media, picture-in-picture,
-/// capture, pinned tabs and favorites are exempt. A hidden page gives up its back/forward page
-/// cache first, pinned or not.
+/// backgrounding, per the tab management mode. `IdleUnloadPolicy` decides which: visible panes,
+/// audible media, picture-in-picture, capture and full screen are exempt, and so are favorites
+/// and pinned tabs that keep running for alerts, show unread counts, keep WhatsApp's local copy
+/// or hold typed text. App backgrounding never unloads favorites or pinned tabs. A hidden page
+/// gives up its back/forward page cache first, pinned or not.
 @MainActor
 class TabCompositorManager: ObservableObject {
     private static let log = Logger(
@@ -166,9 +168,6 @@ class TabCompositorManager: ObservableObject {
             return
         }
         session.clearPageCache()
-        // A page kept running for its alerts is never unloaded automatically, so re-arming would
-        // only wake the app.
-        if tabs?.keepsRunningOffscreen(itemID) == true { return }
 
         let remaining = mode.unloadTimeout - idle
         if remaining > 1 {
@@ -198,12 +197,19 @@ class TabCompositorManager: ObservableObject {
         guard let tabs, !session.isUnloaded else { return false }
         var views = browserManager?.webViewCoordinator?.getAllWebViews(for: session.itemID) ?? []
         if let primary = session.webView { views.append(primary) }
+        let spaceID = tabs.spaceID(of: session.itemID)
         return IdleUnloadPolicy.mayUnload(
             onScreen: tabs.isOnScreen(session.itemID),
             audible: session.hasPlayingAudio || session.hasAudioContent,
             pictureInPicture: session.hasPiPActive,
             capturing: views.contains { $0.cameraCaptureState != .none || $0.microphoneCaptureState != .none },
-            keepsRunningForAlerts: tabs.keepsRunningOffscreen(session.itemID))
+            inFullScreen: views.contains { $0.fullscreenState != .notInFullscreen },
+            keepsRunningForAlerts: tabs.keepsRunningOffscreen(session.itemID),
+            isFavoriteOrPinned: isPinned(session.itemID),
+            hasShownUnreadCount: session.hasShownUnreadCount,
+            keepsLocalCopy: session.url.host?.lowercased() == MessageArchivePolicy.host
+                && spaceID.map { browserManager?.messageArchiveManager.isEnabled(spaceID: $0) == true } == true,
+            hasTypedSinceLoad: session.hasTypedSinceLoad)
     }
 
     /// Higher keeps the page longer.
@@ -291,7 +297,9 @@ class TabCompositorManager: ObservableObject {
 
     private func handleAppDidResignActive() {
         guard mode.unloadsOnBackground, let sessions = tabs?.sessions else { return }
-        sessions.filter(canUnloadInactive).forEach { evict($0, reason: .background) }
+        // Favorites and pinned tabs would reload on every return to Nook; the idle timer and the
+        // loaded-page budget still cover them.
+        sessions.filter { canUnloadInactive($0) && !isPinned($0.itemID) }.forEach { evict($0, reason: .background) }
     }
 
     // MARK: - Loaded Page Budget
