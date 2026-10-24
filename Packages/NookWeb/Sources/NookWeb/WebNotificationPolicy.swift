@@ -51,9 +51,10 @@ public enum WebNotificationPolicy {
     }
 
     /// Whether a page keeps running with no window showing it: a favorite or pinned tab
-    /// (`isSynced`) of a secure site whose notifications the person allowed.
-    public static func keepsRunning(isSynced: Bool, url: URL?, stored: SitePermissionPolicy) -> Bool {
-        guard isSynced, let url, let scheme = url.scheme, let host = url.host else { return false }
+    /// (`isSynced`) of a secure site whose notifications the person allowed. Agent-space pages
+    /// never notify, so they never stay up.
+    public static func keepsRunning(isSynced: Bool, isAgent: Bool = false, url: URL?, stored: SitePermissionPolicy) -> Bool {
+        guard isSynced, !isAgent, let url, let scheme = url.scheme, let host = url.host else { return false }
         return isSecure(scheme: scheme, host: host) && stored == .allow
     }
 

@@ -210,7 +210,8 @@ extension PageSession: WKNavigationDelegate {
         if controller?.webViews != nil, webView === primaryWebView {
             var views = controller?.webViews?.allWebViews(for: itemID) ?? []
             views.append(webView)
-            if views.allSatisfy({ $0.window == nil }) {
+            // A page kept running offscreen (a favorite that may notify) reloads instead.
+            if views.allSatisfy({ $0.window == nil }), controller?.keepsRunningOffscreen(itemID) != true {
                 controller?.unload(itemID)
                 return
             }

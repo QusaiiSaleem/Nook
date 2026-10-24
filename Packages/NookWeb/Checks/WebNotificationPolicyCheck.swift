@@ -55,6 +55,8 @@ struct WebNotificationPolicyCheck {
         precondition(!WebNotificationPolicy.keepsRunning(isSynced: true, url: whatsapp, stored: .block))
         precondition(!WebNotificationPolicy.keepsRunning(isSynced: true, url: URL(string: "http://web.whatsapp.com/"), stored: .allow))
         precondition(!WebNotificationPolicy.keepsRunning(isSynced: true, url: nil, stored: .allow))
+        precondition(!WebNotificationPolicy.keepsRunning(isSynced: true, isAgent: true, url: whatsapp, stored: .allow),
+                     "an Agent-space page never keeps running")
 
         // Requests arriving while a prompt is open for the same site join it.
         var prompts = WebNotificationPrompts<Int>()

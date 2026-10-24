@@ -23,7 +23,7 @@ extension TabsController {
            view.cameraCaptureState != .none || view.microphoneCaptureState != .none { return false }
         let url = session(for: itemID)?.url ?? device.openPages[itemID]?.url
         return WebNotificationPolicy.keepsRunning(
-            isSynced: tree.scope(of: itemID) == .synced, url: url,
+            isSynced: tree.scope(of: itemID) == .synced, isAgent: isInAgentSpace(itemID), url: url,
             stored: url?.host.map { settings.permission(.notifications, for: $0) } ?? .ask)
     }
 

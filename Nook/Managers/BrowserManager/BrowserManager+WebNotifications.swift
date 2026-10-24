@@ -27,9 +27,11 @@ extension BrowserManager {
             }
             guard let self else { return }
             for id in self.tabs.backgroundLaunchItems() {
-                guard let session = self.tabs.ensureSession(for: id), session.isUnloaded else { continue }
+                // Closed (or no longer allowed) while it waited its turn: closing stops it.
+                guard self.tabs.backgroundLaunchItems().contains(id),
+                      let session = self.tabs.ensureSession(for: id), session.isUnloaded else { continue }
                 self.compositorManager.load(session)
-                Self.backgroundLog.notice("background page started: \(session.url.host ?? "", privacy: .public)")
+                Self.backgroundLog.notice("background page started: \(session.url.host ?? "", privacy: .private)")
                 if let view = session.webView { _ = await Self.waitForStartupNavigation(view) }
                 try? await Task.sleep(for: .milliseconds(350))
             }
