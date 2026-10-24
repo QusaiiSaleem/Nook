@@ -123,10 +123,13 @@ extension PlatformPageView: NSViewRepresentable {
         }
 
         override func scrollWheel(with event: NSEvent) {
+            // No `NSEvent.isSwipeTrackingFromScrollEventsEnabled` check, as in Arc: that preference
+            // is per device, and with a Magic Mouse's one-finger "Swipe between pages" off it is
+            // false, so the sidebar never switched spaces. `trackSwipeEvent` tracks either way, and
+            // a sidebar has no horizontal content of its own for the swipe to take from.
             guard !isTracking,
                   event.phase == .began,
                   event.hasPreciseScrollingDeltas,
-                  NSEvent.isSwipeTrackingFromScrollEventsEnabled,
                   abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY),
                   let coordinator, let page
             else { return super.scrollWheel(with: event) }
