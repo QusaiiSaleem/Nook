@@ -22,8 +22,10 @@ extension PageSession {
         isMobileView = on
         var views = controller?.webViews?.allWebViews(for: itemID) ?? []
         if let primary = webView, !views.contains(where: { $0 === primary }) { views.append(primary) }
-        for view in views { view.customUserAgent = userAgent }
-        webView?.reload()
+        for view in views {
+            view.customUserAgent = userAgent
+            view.reload()
+        }
         controller?.refreshWindows(showing: itemID)
     }
 }

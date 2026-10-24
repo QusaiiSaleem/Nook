@@ -8,6 +8,7 @@
 //
 
 import AppKit
+import WebKit
 import SwiftUI
 import NookDesign
 import NookSettings
@@ -71,14 +72,20 @@ final class SplitPaneView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Puts `view` in the pane, leaving it alone when it is already there.
-    func show(_ view: NSView) {
+    /// Puts `view` in the pane, leaving it alone when it is already there. A page in mobile view
+    /// is phone-wide in the middle of the pane (`MobileView`).
+    func show(_ view: NSView, mobile: Bool = false) {
         if view.superview !== content {
             content.subviews.forEach { $0.removeFromSuperview() }
             content.addSubview(view)
         }
-        view.frame = content.bounds
-        view.autoresizingMask = [.width, .height]
+        if mobile, view is WKWebView {
+            view.frame = MobileView.frame(in: content.bounds)
+            view.autoresizingMask = [.minXMargin, .maxXMargin, .height]
+        } else {
+            view.frame = content.bounds
+            view.autoresizingMask = [.width, .height]
+        }
         view.isHidden = false
     }
 

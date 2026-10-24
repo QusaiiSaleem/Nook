@@ -699,7 +699,7 @@ struct TabCompositorWrapper: NSViewRepresentable {
 
             for (pane, session, rect) in [(panes[0], leftSession, leftRect), (panes[1], rightSession, rightRect)] {
                 pane.frame = rect
-                pane.show(pageView(for: session, reusing: pane.content.subviews))
+                pane.show(pageView(for: session, reusing: pane.content.subviews), mobile: session.isMobileView)
             }
 
             // The gap between the panes resizes them.
@@ -763,8 +763,9 @@ struct TabCompositorWrapper: NSViewRepresentable {
             }
         }
 
-        if mobile {
-            // Phone-wide in the middle, staying centered as the window resizes (MobileView).
+        if mobile, desired is WKWebView {
+            // Phone-wide in the middle, staying centered as the window resizes (MobileView). Only
+            // the page itself: the "open in another window" card keeps the full area.
             desired.frame = MobileView.frame(in: containerView.bounds)
             desired.autoresizingMask = [.minXMargin, .maxXMargin, .height]
         } else {

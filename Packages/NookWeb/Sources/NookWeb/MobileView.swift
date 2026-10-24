@@ -22,8 +22,9 @@ public enum MobileView {
         return CGRect(x: (bounds.midX - width / 2).rounded(), y: bounds.minY, width: width, height: bounds.height)
     }
 
-    /// iPhone Safari's user agent. Like desktop Safari's frozen 10_15_7, iPhone Safari 26 keeps its
-    /// OS token at 18_6 and carries the real version in Version/.
+    /// iPhone Safari's user agent. Like desktop Safari's frozen 10_15_7, iPhone Safari froze its OS
+    /// token at 18_6 in Safari 26 (WebKit bug 298260; later point releases moved it to 18_6_2),
+    /// so sites read Version/ for the Safari version, which carries the installed one.
     public static func userAgent(safariVersion: String) -> String {
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
             + "Version/\(safariVersion) Mobile/15E148 Safari/604.1"
