@@ -62,6 +62,10 @@ struct WebNotificationScriptsCheck {
         check_iframe_cannot_reach_handler()
         check_click_fires_onclick()
         check_page_cannot_see_handler()
+        check_worker_show_notification_reaches_handler()
+        let firstID = recorder.shows(titled: "Ahmad").first?.body["id"] as? String
+        check_load_time_request_does_not_prompt()
+        check_ids_unique_across_reloads(previous: firstID)
         print("WebNotificationScriptsCheck passed")
     }
 
@@ -75,6 +79,8 @@ struct WebNotificationScriptsCheck {
     @MainActor static func check_request_permission_resolves() {
         let answer = callAsync("return await Notification.requestPermission()") as? String
         precondition(answer == "granted", "requestPermission resolved \(String(describing: answer))")
+        precondition(recorder.messages.contains { $0.body["kind"] as? String == "request" },
+                     "a request made with user activation never reached the handler as a request")
     }
 
     @MainActor static func check_show_reaches_handler() {
@@ -108,6 +114,34 @@ struct WebNotificationScriptsCheck {
     @MainActor static func check_page_cannot_see_handler() {
         let seen = evaluate("typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nookWebNotification)")
         precondition(seen as? String == "undefined", "the page world can reach the native handler")
+    }
+
+    /// Sites that show notifications through their service worker registration reach Nook too.
+    @MainActor static func check_worker_show_notification_reaches_handler() {
+        _ = evaluate("ServiceWorkerRegistration.prototype.showNotification.call({}, 'Worker', { body: 'w' }).catch(() => {}); 'ok'")
+        precondition(waitUntil { !recorder.shows(titled: "Worker").isEmpty }, "registration.showNotification never reached the handler")
+    }
+
+    /// A request with no click (here, during page load) is answered from the stored value and never prompts.
+    @MainActor static func check_load_time_request_does_not_prompt() {
+        recorder.messages.removeAll()
+        web.loadHTMLString(
+            "<script>Notification.requestPermission().then(p => { window.__early = p })</script><body>again</body>",
+            baseURL: URL(string: "https://example.test/"))
+        precondition(waitUntil { (evaluate("String(window.__early)") as? String) == "granted" }, "the load-time request never resolved")
+        precondition(!recorder.messages.contains { $0.body["kind"] as? String == "request" },
+                     "a request with no user activation reached the handler as a request (it would prompt)")
+    }
+
+    /// Every page load numbers its notifications apart from the last one, so an old banner cannot
+    /// click a new page's notification.
+    @MainActor static func check_ids_unique_across_reloads(previous: String?) {
+        precondition(previous != nil, "the first page's notification had no id")
+        _ = evaluate("new Notification('Again'); 'ok'")
+        precondition(waitUntil { !recorder.shows(titled: "Again").isEmpty }, "show after reload never reached the handler")
+        let id = recorder.shows(titled: "Again")[0].body["id"] as? String
+        precondition(id != previous, "notification id \(String(describing: id)) repeated after a reload")
+        precondition((id?.count ?? 0) <= 64)
     }
 
     // MARK: - Helpers

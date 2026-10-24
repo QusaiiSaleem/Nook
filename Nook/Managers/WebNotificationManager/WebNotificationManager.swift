@@ -47,7 +47,9 @@ final class WebNotificationManager: NSObject, UNUserNotificationCenterDelegate {
             self?.browserManager.tabs.settings.setPermission(.notifications, to: policy, for: host)
             if policy == .allow {
                 // macOS asks once for the whole app; a site's Allow is the moment it matters.
-                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if !granted { Self.log.notice("site allowed, but Nook's notifications are off in System Settings") }
+                }
             }
             completion(policy)
         }
@@ -61,9 +63,10 @@ final class WebNotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent()
         content.title = payload.title
         content.body = payload.body
-        if let spaceName = tabs.spaceID(of: itemID).flatMap({ tabs.space($0)?.name }) {
-            content.subtitle = spaceName
-        }
+        // The page writes the title and body; the site and Space come from Nook, so a page
+        // cannot pass itself off as another sender.
+        let spaceName = tabs.spaceID(of: itemID).flatMap { tabs.space($0)?.name }
+        content.subtitle = [payload.host, spaceName].compactMap { $0 }.joined(separator: " · ")
         content.threadIdentifier = itemID.uuidString
         content.sound = payload.silent ? nil : .default
         content.userInfo = ["itemID": itemID.uuidString, "notificationID": payload.id]
@@ -72,9 +75,17 @@ final class WebNotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let identifier = "\(itemID.uuidString)|\(payload.tag.map { "tag:\($0)" } ?? payload.id)"
         identifiers["\(itemID.uuidString)|\(payload.id)"] = identifier
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error {
-                Self.log.error("notification not posted: \(error.localizedDescription, privacy: .public)")
+        // A site can be allowed from the site menu without the prompt ever running, so macOS is
+        // asked here too; it prompts only the first time (FocusableWKWebView does the same).
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else {
+                return Self.log.notice("notification not posted: Nook's notifications are off in System Settings")
+            }
+            center.add(request) { error in
+                if let error {
+                    Self.log.error("notification not posted: \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
     }

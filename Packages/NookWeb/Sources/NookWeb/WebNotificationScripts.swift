@@ -46,6 +46,9 @@ public enum WebNotificationScripts {
         let permission = 'default';
         let nextRequest = 1;
         let nextID = 1;
+        // Banners outlive the page, so ids carry a per-document prefix: after a reload an old
+        // banner's click must not land on the new page's notification of the same number.
+        const documentKey = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).slice(0, 12);
         const waiting = new Map();
         const live = new Map();
         const ids = new WeakMap();
@@ -95,7 +98,7 @@ public enum WebNotificationScripts {
                 this.onclose = null;
                 this.onshow = null;
                 this.onerror = null;
-                const id = String(nextID++);
+                const id = documentKey + '-' + nextID++;
                 ids.set(this, id);
                 if (permission !== 'granted') {
                     queueMicrotask(() => fire(this, 'error'));
@@ -134,6 +137,20 @@ public enum WebNotificationScripts {
         }
 
         Object.defineProperty(window, 'Notification', { value: Notification, writable: true, configurable: true });
+
+        // Sites that notify through their service worker registration take the same path. Calls
+        // made inside the worker itself cannot be reached: user scripts never run there.
+        if (window.ServiceWorkerRegistration) {
+            ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
+                if (permission !== 'granted') {
+                    return Promise.reject(new TypeError('No notification permission has been granted for this origin.'));
+                }
+                new Notification(title, options);
+                return Promise.resolve();
+            };
+            ServiceWorkerRegistration.prototype.getNotifications = function () { return Promise.resolve([]); };
+        }
+
         ask('query');
     })();
     """
@@ -150,7 +167,12 @@ public enum WebNotificationScripts {
         window.addEventListener('message', function (event) {
             if (event.source !== window || !event.data || typeof event.data !== 'object') { return; }
             const data = event.data;
-            const kind = data.__nookWN;
+            let kind = data.__nookWN;
+            // Without a click a request only reads the stored answer, as Safari refuses to prompt
+            // on page load. Checked here, where the page cannot fake it.
+            if (kind === 'request' && navigator.userActivation && !navigator.userActivation.isActive) {
+                kind = 'query';
+            }
             let message;
             if (kind === 'query' || kind === 'request') {
                 message = { kind: kind, rid: Number(data.rid) };
