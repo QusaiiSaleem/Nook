@@ -537,6 +537,10 @@ class BrowserManager: ObservableObject {
     // MARK: - Startup Loading
 
     private var startupWaitedForContentBlocker = false
+
+    /// Background pages (favorites that may notify) start once per launch.
+
+    var didStartBackgroundPages = false
     private var startupWarmTasks: [UUID: Task<Void, Never>] = [:]
 
     /// Loads a newly registered window's selected page. With "Last Tab, Favorites & Space" the
@@ -565,6 +569,7 @@ class BrowserManager: ObservableObject {
         } else {
             windowState.refreshCompositor()
         }
+        startBackgroundPagesAfterLaunch(waitingFor: selected)
 
         guard nookSettings?.startupLoadMode == .favoritesAndSpace, let spaceID = windowState.spaceID else { return }
         let warmIDs = tabs.rows(space: spaceID)
@@ -592,7 +597,7 @@ class BrowserManager: ObservableObject {
     }
 
     /// Abort speculative warming after a slow page; other tabs remain available on demand.
-    private static func waitForStartupNavigation(_ webView: WKWebView) async -> Bool {
+    static func waitForStartupNavigation(_ webView: WKWebView) async -> Bool {
         let completion = Task { @MainActor in
             for await loading in webView.publisher(for: \.isLoading, options: [.initial, .new]).values {
                 if !loading || Task.isCancelled { return }
