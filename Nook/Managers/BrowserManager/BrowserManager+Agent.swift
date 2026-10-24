@@ -20,6 +20,9 @@ import NookWeb
 
 extension BrowserManager {
     private static let agentIdleDelay: Duration = .seconds(30)
+    /// After parking, how long without a call before the Agent space's pages unload: long enough
+    /// for an agent's pause between steps, short enough that an idle agent costs nothing.
+    private static let agentSleepDelay: Duration = .seconds(300)
 
     func installAgentPageHost() {
         tabs.onAgentPage = { [weak self] session in
@@ -69,7 +72,8 @@ extension BrowserManager {
         host.addSubview(view)
     }
 
-    /// Takes the agent's page out of its host once no call has run for `agentIdleDelay`.
+    /// Takes the agent's page out of its host once no call has run for `agentIdleDelay`, then
+    /// unloads the Agent space's pages after `agentSleepDelay` more. The next call cancels both.
     private func scheduleAgentIdle() {
         agentIdle?.cancel()
         agentIdle = Task { @MainActor [weak self] in
@@ -81,6 +85,13 @@ extension BrowserManager {
                   view.superview is AgentPageHostView else { return }
             agentParked = true
             view.removeFromSuperview()
+
+            try? await Task.sleep(for: Self.agentSleepDelay)
+            guard !Task.isCancelled, agentParked, self.tabs.agentCallsInFlight == 0 else { return }
+            for session in self.tabs.sessions where session.isAgentPage && !session.isUnloaded
+                && !self.tabs.isOnScreen(session.itemID) {
+                self.tabs.unload(session.itemID)
+            }
         }
     }
 }
