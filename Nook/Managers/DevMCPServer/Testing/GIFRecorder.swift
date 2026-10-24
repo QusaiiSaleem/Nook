@@ -5,7 +5,8 @@
 //
 //  MCP `record_start` / `record_stop`: frames of the agent's page become a looping GIF. Frames
 //  are kept as JPEG while recording (a full minute of raw frames would be hundreds of megabytes)
-//  and turned into the GIF when the recording stops.
+//  and turned into the GIF when the recording stops. All image work runs on the recorder's own
+//  queue: on the main thread, a minute's GIF froze the person's browser for 4 to 11 s.
 //
 
 import CoreGraphics
@@ -13,7 +14,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-final class GIFRecorder {
+final class GIFRecorder: @unchecked Sendable {
     enum Failure: LocalizedError {
         case empty, writeFailed
 
@@ -28,9 +29,13 @@ final class GIFRecorder {
     let width: CGFloat
     let fps: Double
     let maxFrames: Int
+    private let queue = DispatchQueue(label: "com.qusai.nook.gif-recorder", qos: .utility)
+    /// Encoded frames; touched on `queue` only.
     private var frames: [Data] = []
+    /// Frames taken so far; touched by the caller only.
+    private var taken = 0
 
-    var count: Int { frames.count }
+    var count: Int { taken }
 
     init(width: CGFloat = 800, fps: Double = 4, maxSeconds: TimeInterval = 60) {
         self.width = width
@@ -38,15 +43,54 @@ final class GIFRecorder {
         maxFrames = Int(fps * maxSeconds)
     }
 
-    /// Keeps `frame`, scaled down to `width`; false once the recording is full.
+    /// Keeps `frame`, scaled down to `width` on the recorder's queue; false once the recording is full.
     func add(_ frame: CGImage) -> Bool {
-        guard frames.count < maxFrames, let jpeg = Self.jpeg(Self.scaled(frame, toWidth: width)) else { return false }
-        frames.append(jpeg)
+        guard taken < maxFrames else { return false }
+        taken += 1
+        let width = self.width
+        queue.async {
+            if let jpeg = Self.jpeg(Self.scaled(frame, toWidth: width)) { self.frames.append(jpeg) }
+        }
         return true
     }
 
-    /// Writes a GIF that loops forever and answers how many frames it holds.
-    func write(to url: URL) throws -> Int {
+    /// Takes a frame every 1/fps until the recording is full, `maxSeconds` have passed or the task
+    /// is cancelled. A frame that fails is skipped; one that does not come within a second is
+    /// given up, so a stuck page cannot keep the recording (and the agent page) going.
+    @MainActor func record(_ frame: @escaping @MainActor () async -> CGImage?) async {
+        let clock = ContinuousClock()
+        let end = clock.now.advanced(by: .seconds(Double(maxFrames) / fps))
+        while !Task.isCancelled, clock.now < end, count < maxFrames {
+            let started = clock.now
+            if let image = await Self.within(.seconds(1), frame), !add(image) { return }
+            try? await Task.sleep(until: min(started.advanced(by: .seconds(1 / fps)), end), clock: clock)
+        }
+    }
+
+    /// The frame, or nil when it has not come within `limit`.
+    @MainActor private static func within(_ limit: Duration, _ frame: @escaping @MainActor () async -> CGImage?) async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            let once = FrameOnce()
+            Task { @MainActor in
+                let image = await frame()
+                if once.claim() { continuation.resume(returning: image) }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: limit)
+                if once.claim() { continuation.resume(returning: nil) }
+            }
+        }
+    }
+
+    /// Writes a GIF that loops forever, once every frame is encoded, and answers how many frames
+    /// it holds.
+    func write(to url: URL) async throws -> Int {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { continuation.resume(with: Result { try self.writeNow(to: url) }) }
+        }
+    }
+
+    private func writeNow(to url: URL) throws -> Int {
         guard !frames.isEmpty else { throw Failure.empty }
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, frames.count, nil)
         else { throw Failure.writeFailed }
@@ -79,5 +123,15 @@ final class GIFRecorder {
         guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
         return CGImageDestinationFinalize(destination) ? data as Data : nil
+    }
+}
+
+/// Lets the first of a frame and its time limit answer.
+@MainActor private final class FrameOnce {
+    private var claimed = false
+    func claim() -> Bool {
+        if claimed { return false }
+        claimed = true
+        return true
     }
 }

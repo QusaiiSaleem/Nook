@@ -43,6 +43,13 @@ struct InspectReportCheck {
         ])
         precondition(twins.count == 1 && twins[0].width == 390 && !twins[0].message.contains("390, 390"), "twins: \(twins)")
 
+        // "Could not check" is never cut short: a hidden "width 1600: not checked" reads as a pass.
+        var unsure = report()
+        unsure.unassessable = (1...30).map { "contrast: text over an image or gradient: div.card\($0)" } + ["width 1600: not checked, out of time"]
+        let unsureText = unsure.markdown()
+        precondition(unsureText.contains("width 1600: not checked, out of time"), "an out-of-time width was hidden:\n\(unsureText)")
+        precondition(unsureText.contains("div.card30"), "could-not-check lines were cut")
+
         var noisy = report()
         noisy.errors = (1...25).map { "error \($0)" }
         let lines = noisy.markdown().components(separatedBy: "\n").filter { $0.hasPrefix("- error ") }

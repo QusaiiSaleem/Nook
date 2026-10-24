@@ -16,12 +16,16 @@ enum AgentInput {
     enum Failure: LocalizedError {
         case noWindow
         case noElement(String)
+        case cannotFocus(String)
         case unknownKeys([String])
+        case busy
 
         var errorDescription: String? {
             switch self {
             case .noWindow: "The page is not in a window yet; call any page tool first."
+            case .busy: "Another type call is still running; wait for it to finish."
             case .noElement(let selector): "No element matches \(selector)."
+            case .cannotFocus(let selector): "\(selector) exists but cannot take focus (hidden or disabled); open whatever reveals it first."
             case .unknownKeys(let keys):
                 "Unknown keys: \(keys.joined(separator: ", ")). Known: \(AgentInput.keyCodes.keys.sorted().joined(separator: ", "))."
             }
@@ -39,44 +43,58 @@ enum AgentInput {
         "ArrowUp": (126, "\u{F700}"),
     ]
 
+    /// One call at a time: two interleaved calls would type into each other's fields, and the later
+    /// one would "give back" the keyboard to the page the earlier one had taken it for.
+    private static var running = false
+
     /// Focuses `selector` (when given), types `text`, presses `keys` in order, and answers the
-    /// focused element's value.
+    /// focused element's value. The keyboard goes back as soon as the keys are in; the value is
+    /// read after.
     static func type(_ text: String?, keys: [String], into webView: WKWebView, selector: String?) async throws -> String {
         guard let window = webView.window else { throw Failure.noWindow }
         let unknown = keys.filter { keyCodes[$0] == nil }
         guard unknown.isEmpty else { throw Failure.unknownKeys(unknown) }
+        guard !running else { throw Failure.busy }
+        running = true
+        defer { running = false }
 
+        // Named before the page focuses anything: WebKit takes the keyboard for the web view as
+        // soon as the page focuses an element.
         let previous = owner(of: window.firstResponder)
         let caret = (window.firstResponder as? NSTextView)?.selectedRanges
-        window.makeFirstResponder(webView)
-        defer { giveBack(to: previous, caret: caret, in: window) }
-
         if let selector {
-            let focused = try await webView.callAsyncJavaScript(
-                "const el = document.querySelector(selector); if (!el) { return false; } el.focus(); return document.activeElement === el;",
-                arguments: ["selector": selector], in: nil, contentWorld: .defaultClient) as? Bool
-            guard focused == true else { throw Failure.noElement(selector) }
+            let focus = try? await webView.callAsyncJavaScript(
+                "const el = document.querySelector(selector); if (!el) { return 'missing'; } el.focus(); return document.activeElement === el ? 'ok' : 'unfocusable';",
+                arguments: ["selector": selector], in: nil, contentWorld: .defaultClient) as? String
+            guard focus == "ok" else {
+                giveBack(to: previous === webView ? nil : previous, caret: caret, in: window)
+                throw focus == "unfocusable" ? Failure.cannotFocus(selector) : Failure.noElement(selector)
+            }
         }
+        window.makeFirstResponder(webView)
         if let text, !text.isEmpty { webView.insertText(text) }
         for name in keys {
-            if let key = keyCodes[name] { press(key, in: window) }
+            if let key = keyCodes[name] { press(key, into: webView, window: window) }
         }
         // WebKit hands key events to the page one at a time, each after the last is handled.
-        try await Task.sleep(for: .milliseconds(50 + 30 * keys.count))
+        try? await Task.sleep(for: .milliseconds(50 + 30 * keys.count))
+        giveBack(to: previous === webView ? nil : previous, caret: caret, in: window)
+
         let value = try await webView.callAsyncJavaScript(
             "const el = document.activeElement; return el ? String(el.value ?? el.textContent ?? '') : '';",
             arguments: [:], in: nil, contentWorld: .defaultClient) as? String
         return value ?? ""
     }
 
-    private static func press(_ key: (code: UInt16, chars: String), in window: NSWindow) {
+    /// Straight to the page, not through the window, so a key can only reach the agent's page.
+    private static func press(_ key: (code: UInt16, chars: String), into webView: WKWebView, window: NSWindow) {
         let flags: NSEvent.ModifierFlags = key.code >= 123 ? [.function, .numericPad] : []
         for type in [NSEvent.EventType.keyDown, .keyUp] {
             guard let event = NSEvent.keyEvent(
                 with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, characters: key.chars,
                 charactersIgnoringModifiers: key.chars, isARepeat: false, keyCode: key.code) else { continue }
-            window.sendEvent(event)
+            if type == .keyDown { webView.keyDown(with: event) } else { webView.keyUp(with: event) }
         }
     }
 

@@ -40,6 +40,7 @@ final class ThrottleProxy: @unchecked Sendable {
     private let down: Pacer
     private var tunnels: [ObjectIdentifier: Tunnel] = [:]
     private var opened = 0
+    private var stopped = false
     private var started: CheckedContinuation<UInt16, Error>?
 
     init(profile: Profile) throws {
@@ -69,6 +70,8 @@ final class ThrottleProxy: @unchecked Sendable {
 
     func stop() {
         queue.async {
+            // Chunks still waiting for their turn are dropped, not sent minutes after the call.
+            self.stopped = true
             self.listener.cancel()
             self.tunnels.values.forEach { $0.cancel() }
             self.tunnels.removeAll()
@@ -166,7 +169,9 @@ final class ThrottleProxy: @unchecked Sendable {
         source.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self, weak tunnel] data, _, isComplete, error in
             guard let self, let tunnel else { return }
             if let data, !data.isEmpty { self.forward(data, on: pipe, to: sink, pacer: pacer) }
-            if error != nil {
+            if self.stopped {
+                return
+            } else if error != nil {
                 self.close(tunnel)
             } else if isComplete {
                 self.queue.asyncAfter(deadline: pipe.last) {
@@ -176,6 +181,10 @@ final class ThrottleProxy: @unchecked Sendable {
                 if tunnel.toUpstream.ended, tunnel.toClient.ended {
                     self.queue.asyncAfter(deadline: max(tunnel.toUpstream.last, tunnel.toClient.last) + 1) { self.close(tunnel) }
                 }
+            } else if pipe.queued > self.profile.bytesPerSecond {
+                // More than a second of data waits to go out: read on once it drains, so a big
+                // download is not held in memory for the minutes it takes at this speed.
+                pipe.readMore = { [weak self] in self?.relay(from: source, to: sink, pipe: pipe, pacer: pacer, tunnel) }
             } else {
                 self.relay(from: source, to: sink, pipe: pipe, pacer: pacer, tunnel)
             }
@@ -197,7 +206,16 @@ final class ThrottleProxy: @unchecked Sendable {
             let chunk = data.subdata(in: offset..<end)
             let at = pacer.reserve(bytes: chunk.count, notBefore: notBefore)
             pipe.last = at
-            queue.asyncAfter(deadline: at) { sink.send(content: chunk, completion: .idempotent) }
+            pipe.queued += chunk.count
+            queue.asyncAfter(deadline: at) { [weak self] in
+                guard let self, !self.stopped else { return }
+                sink.send(content: chunk, completion: .idempotent)
+                pipe.queued -= chunk.count
+                if pipe.queued <= self.profile.bytesPerSecond / 2, let readMore = pipe.readMore {
+                    pipe.readMore = nil
+                    readMore()
+                }
+            }
             offset = end
         }
     }
@@ -228,6 +246,10 @@ final class ThrottleProxy: @unchecked Sendable {
         var started = false
         var ended = false
         var last = DispatchTime.now()
+        /// Bytes waiting for their turn on the link.
+        var queued = 0
+        /// The paused read, resumed once the queue drains.
+        var readMore: (() -> Void)?
     }
 
     private final class Tunnel {

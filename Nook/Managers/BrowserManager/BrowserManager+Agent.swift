@@ -101,11 +101,3 @@ enum AgentPageError: LocalizedError {
     var errorDescription: String? { "The Agent space's tab has no page" }
 }
 
-/// Holds the agent's page out of sight: transparent, outside the content area, never the target
-/// of a click.
-final class AgentPageHostView: NSView {
-    /// How far left of the content area the host sits; wider than any window.
-    static let offset: CGFloat = 20_000
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func accessibilityChildren() -> [Any]? { [] }
-}

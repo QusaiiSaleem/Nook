@@ -62,13 +62,20 @@ enum InspectScripts {
         const resources = performance.getEntriesByType('resource');
         const host = location.host;
         const bytesByType = {};
-        let total = 0, third = 0;
+        let total = 0, third = 0, fromCache = 0, transferred = 0;
         const sized = resources.map((r) => {
-            const bytes = r.transferSize || r.encodedBodySize || 0;
+            // WebKit marks a file from the browser cache with no protocol and no body size (its
+            // transferSize is a flat 300); its real size is unknown, so it adds nothing to the weight.
+            const cached = r.nextHopProtocol === '' && r.transferSize > 0 && r.encodedBodySize === 0;
+            if (cached) { fromCache++; } else { transferred += r.transferSize || 0; }
+            const bytes = cached ? 0 : (r.encodedBodySize || r.transferSize || 0);
             bytesByType[r.initiatorType] = (bytesByType[r.initiatorType] || 0) + bytes;
             total += bytes;
             try { if (new URL(r.name).host !== host) { third += bytes; } } catch (e) {}
-            return { url: r.name, bytes: bytes, ms: Math.round(r.duration) };
+            // From sending the request to the last byte: time queued behind other requests is the
+            // browser's, not the file's.
+            const ms = r.requestStart > 0 ? r.responseEnd - r.requestStart : r.duration;
+            return { url: r.name, bytes: bytes, ms: Math.round(ms) };
         });
         const round = (v) => (v == null ? null : Math.round(v));
         return JSON.stringify({
@@ -79,6 +86,7 @@ enum InspectScripts {
             load: nav ? round(nav.loadEventEnd) : null,
             documentBytes: nav ? (nav.transferSize || nav.encodedBodySize || 0) : 0,
             requests: resources.length,
+            fromCache: fromCache,
             bytesByType: bytesByType,
             totalBytes: total,
             thirdPartyShare: total ? Math.round(third / total * 100) : 0,
@@ -93,12 +101,15 @@ enum InspectScripts {
     (function () {
         const signature = (el) => { const s = getComputedStyle(el); return [s.outlineStyle, s.outlineWidth, s.outlineColor, s.boxShadow, s.borderTopColor, s.backgroundColor, s.textDecorationLine].join('|'); };
         const base = new WeakMap();
-        const focusable = Array.from(document.querySelectorAll('a[href], button, input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"])')).slice(0, 200);
-        for (const el of focusable) { base.set(el, signature(el)); }
+        const every = Array.from(document.querySelectorAll('a[href], button, input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"])'));
+        every.slice(0, \#(focusSampleLimit)).forEach((el, index) => base.set(el, { look: signature(el), index: index }));
         Object.defineProperty(window, '__nookFocusBase', { value: { base: base, signature: signature }, configurable: true });
-        return String(focusable.length);
+        return String(every.length);
     })()
     """#
+
+    /// How many controls the focus baseline remembers.
+    static let focusSampleLimit = 200
 
     /// After each Tab press: the focused element and whether it looks any different.
     static let focusCheck = #"""
@@ -107,7 +118,9 @@ enum InspectScripts {
         const state = window.__nookFocusBase;
         if (!el || el === document.body || !state || !state.base.has(el)) { return JSON.stringify({ selector: null }); }
         const describe = (node) => node.id ? node.tagName.toLowerCase() + '#' + node.id : node.tagName.toLowerCase() + Array.from(node.classList).slice(0, 2).map((c) => '.' + c).join('');
-        return JSON.stringify({ selector: describe(el), changed: state.signature(el) !== state.base.get(el) });
+        // The index tells controls apart: many share a description (every plain link is "a").
+        const entry = state.base.get(el);
+        return JSON.stringify({ selector: describe(el), index: entry.index, changed: state.signature(el) !== entry.look });
     })()
     """#
 
@@ -191,7 +204,9 @@ enum InspectScripts {
         const unassessable = [];
         const ARABIC = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/;
         const ARABIC_ALL = /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]/g;
-        const LATIN_RUN = /[A-Za-z][A-Za-z .\-]{2,}/;
+        // Latin glued to symbols, then Arabic or the end of the line: right-to-left layout moves
+        // the symbols to the wrong side ("C++" shows as "++C"). Plain words and brackets lay out fine.
+        const LATIN_LEAK = /[A-Za-z][+#*&%@\/\\-]+(?=\s*(?:[\u0600-\u06FF]|$))/;
         const add = (severity, rule, el, message, fix, perWidth) => {
             const finding = { severity: severity, rule: rule, message: message };
             if (el) { finding.selector = sel(el); }
@@ -324,6 +339,20 @@ enum InspectScripts {
             }
             return hex({ r: toward, g: toward, b: toward });
         }
+        // Pictures under text: their colours are unknown, so text over them cannot be graded.
+        const media = all.filter((el) => ['IMG', 'VIDEO', 'CANVAS', 'IFRAME', 'EMBED', 'OBJECT', 'svg'].includes(el.tagName) && visible(el))
+            .slice(0, 200).map((el) => ({ el: el, rect: el.getBoundingClientRect() }));
+        function overMedia(el) {
+            const r = el.getBoundingClientRect();
+            const area = r.width * r.height;
+            if (!area) { return false; }
+            return media.some((m) => {
+                if (m.el === el || el.contains(m.el) || m.el.contains(el)) { return false; }
+                const w = Math.min(r.right, m.rect.right) - Math.max(r.left, m.rect.left);
+                const h = Math.min(r.bottom, m.rect.bottom) - Math.max(r.top, m.rect.top);
+                return w > 0 && h > 0 && w * h >= area * 0.3;
+            });
+        }
         const texts = all.filter((el) => ownText(el) && !['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(el.tagName) && visible(el));
         const textCap = 400;
         if (texts.length > textCap) { unassessable.push('contrast: checked the first ' + textCap + ' of ' + texts.length + ' text elements'); }
@@ -331,7 +360,7 @@ enum InspectScripts {
         for (const el of texts.slice(0, textCap)) {
             const style = getComputedStyle(el);
             const fg = rgba(style.color);
-            const bg = background(el);
+            const bg = overMedia(el) ? null : background(el);
             if (!fg) { continue; }
             if (!bg) { if (overImage < 10) { unassessable.push('contrast: text over an image or gradient: ' + sel(el)); } overImage++; continue; }
             const size = parseFloat(style.fontSize);
@@ -395,8 +424,8 @@ enum InspectScripts {
             if (style.textAlign === 'justify') { add('warning', 'arabic-justify', el, 'Justified Arabic text: stretching breaks the joins between letters', 'text-align: start'); }
             if (MONO.test(style.fontFamily)) { add('warning', 'arabic-monospace', el, 'Arabic in a monospace font (' + style.fontFamily.split(',')[0] + ') renders badly', 'use a proportional font for Arabic'); }
             if (arabicShare >= 0.5 && style.direction === 'ltr') { add('warning', 'arabic-ltr', el, 'Arabic text laid out left to right', 'dir="rtl" on it or an ancestor'); }
-            if (style.direction === 'rtl' && LATIN_RUN.test(text)) {
-                add('advice', 'latin-leak', el, 'A Latin run sits bare inside right-to-left text: punctuation may jump sides', 'wrap the Latin run in <bdi> or <span dir="ltr">');
+            if (style.direction === 'rtl' && LATIN_LEAK.test(text)) {
+                add('advice', 'latin-leak', el, 'Latin text ending in symbols inside right-to-left text: the symbols show on the wrong side ("C++" as "++C")', 'wrap the Latin run in <bdi> or <span dir="ltr">');
             }
         }
 

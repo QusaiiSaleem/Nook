@@ -237,16 +237,16 @@ enum DevMCPTesting {
         bm.tabs.agentCallsInFlight += 1
         item.task = Task { @MainActor in
             defer { release(item, bm) }
-            while !Task.isCancelled {
-                let started = ContinuousClock.now
+            // Ends when full or after `seconds` even if frames fail, so a forgotten recording cannot
+            // hold the agent page (and the sidebar's pulse) for ever.
+            await item.recorder.record {
                 // The agent's tab at each frame, so a tab it opens mid-recording is followed.
-                if let view = bm.tabs.agentItem.flatMap(bm.tabs.session(for:))?.webView,
-                   let image = try? await view.takeSnapshot(configuration: nil),
-                   let frame = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-                   !item.recorder.add(frame) {
-                    return
-                }
-                try? await Task.sleep(until: started.advanced(by: .seconds(1 / fps)), clock: .continuous)
+                guard let view = bm.tabs.agentItem.flatMap(bm.tabs.session(for:))?.webView else { return nil }
+                let config = WKSnapshotConfiguration()
+                // WebKit draws the frame at the GIF's width (snapshotWidth is in points).
+                config.snapshotWidth = NSNumber(value: Double(item.recorder.width) / Double(view.window?.backingScaleFactor ?? 2))
+                guard let image = try? await view.takeSnapshot(configuration: config) else { return nil }
+                return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
             }
         }
         recording = item
@@ -263,7 +263,7 @@ enum DevMCPTesting {
             return text("Could not make a file in \(DevMCPFiles.root.path)", error: true)
         }
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let frames = try item.recorder.write(to: file)
+        let frames = try await item.recorder.write(to: file)
         return text(json(["path": file.path, "frames": frames, "seconds": Double(frames) / item.recorder.fps]))
     }
 

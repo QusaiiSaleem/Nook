@@ -88,6 +88,8 @@ struct InspectScriptsCheck {
         capture_records_console_and_failed_loads()
         clean_arabic_page_has_no_arabic_findings()
         rtl_overflow_names_the_element()
+        text_over_a_photo_is_unassessable()
+        latin_words_in_arabic_are_not_a_leak()
         text_over_a_gradient_is_unassessable()
         big_pages_say_where_they_stopped()
         facts_and_speed_answer()
@@ -146,6 +148,38 @@ struct InspectScriptsCheck {
         let overflow = audit(width: 390, phone: true).findings.filter { $0["rule"] as? String == "overflow" }
         precondition(overflow.contains { ($0["selector"] as? String)?.contains("wideRTL") == true }, "the box past the left edge was not named: \(overflow)")
         resize(1280)
+    }
+
+    /// A white title over a darkened photo: the photo is an <img>, not a CSS background, and its
+    /// colours are unknown, so the contrast cannot be graded (grading it against white said 1:1
+    /// and suggested grey, which would make the title worse).
+    @MainActor static func text_over_a_photo_is_unassessable() {
+        load("""
+            <html><body style="margin: 0; background: #fff"><div style="position: relative">
+            <img src="\(pixel)" style="width: 600px; height: 240px; filter: brightness(0.1)">
+            <h1 id="overphoto" style="position: absolute; top: 40px; left: 20px; margin: 0; color: #fff">A title on a photo</h1>
+            </div></body></html>
+            """)
+        let result = audit(width: 1280)
+        precondition(!result.findings.contains { $0["rule"] as? String == "contrast" && ($0["selector"] as? String)?.contains("overphoto") == true },
+                     "text over a photo was graded: \(result.findings)")
+        precondition(result.unassessable.contains { $0.contains("overphoto") }, "text over a photo not listed: \(result.unassessable)")
+    }
+
+    /// Brand names in correct Arabic are not a defect; Latin glued to symbols that then jump to the
+    /// wrong side ("C++" showing as "++C") is.
+    @MainActor static func latin_words_in_arabic_are_not_a_leak() {
+        load("""
+            <html lang="ar" dir="rtl"><body style="margin: 16px; font-family: -apple-system, sans-serif; color: #111; background: #fff">
+            <p id="brands">أعلنت Apple عن iPhone جديد في مؤتمر WWDC هذا العام.</p>
+            <p id="more">يستخدم الناس Google يوميًا، ويعمل iOS 26 على الأجهزة الحديثة (Safari).</p>
+            <p id="plus">تعلمت لغة C++ اليوم</p>
+            </body></html>
+            """)
+        let leaks = audit(width: 1280).findings.filter { $0["rule"] as? String == "latin-leak" }
+        precondition(!leaks.contains { ($0["selector"] as? String)?.contains("brands") == true || ($0["selector"] as? String)?.contains("more") == true },
+                     "brand names in Arabic flagged: \(leaks)")
+        precondition(leaks.contains { ($0["selector"] as? String)?.contains("plus") == true }, "C++ inside Arabic not flagged: \(leaks)")
     }
 
     @MainActor static func text_over_a_gradient_is_unassessable() {

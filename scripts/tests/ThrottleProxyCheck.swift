@@ -20,6 +20,7 @@ struct ThrottleProxyCheck {
         try await fourG_round_trip_is_quick(echo: echo)
         try await connections_share_one_link(echo: echo)
         try await plain_requests_are_refused(echo: echo)
+        try await a_big_download_is_not_hoarded()
         print("ThrottleProxyCheck passed")
     }
 
@@ -76,6 +77,31 @@ struct ThrottleProxyCheck {
         try await send(connection, Data("GET http://127.0.0.1:\(echo)/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".utf8))
         let answer = try await receive(connection) { $0.range(of: Data("\r\n\r\n".utf8)) != nil }
         precondition(String(decoding: answer, as: UTF8.self).hasPrefix("HTTP/1.1 501"), "answer: \(String(decoding: answer, as: UTF8.self))")
+    }
+
+    /// A site that sends 8 MB at once through a 50 KB/s link: the proxy must read only as fast as
+    /// it can pass the bytes on, not hold megabytes that take minutes to send.
+    static func a_big_download_is_not_hoarded() async throws {
+        let blast = try await BlastServer.start(bytes: 8_000_000)
+        let proxy = try ThrottleProxy(profile: .slow3g)
+        let port = try await proxy.start()
+        let connection = try await connect(port)
+        try await send(connection, Data("CONNECT 127.0.0.1:\(blast) HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".utf8))
+        _ = try await receive(connection) { $0.range(of: Data("\r\n\r\n".utf8)) != nil }
+        let before = footprint()
+        let end = Date().addingTimeInterval(3)
+        while Date() < end { _ = try? await receive(connection) { !$0.isEmpty } }
+        let grew = Double(footprint()) - Double(before)
+        connection.cancel()
+        proxy.stop()
+        precondition(grew < 4_000_000, "the proxy held \(Int(grew / 1_000_000)) MB of a download it can send at 50 KB/s")
+    }
+
+    /// This process's memory footprint in bytes.
+    static func footprint() -> UInt64 {
+        var info = rusage_info_v4()
+        let ok = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(getpid(), RUSAGE_INFO_V4, $0) } }
+        return ok == 0 ? info.ri_phys_footprint : 0
     }
 
     // MARK: - Helpers
@@ -158,6 +184,22 @@ enum EchoServer {
             if let data, !data.isEmpty { connection.send(content: data, completion: .idempotent) }
             if isComplete || error != nil { connection.cancel() } else { echo(connection) }
         }
+    }
+}
+
+/// A server that sends `bytes` the moment a connection opens, then waits.
+enum BlastServer {
+    static func start(bytes: Int) async throws -> UInt16 {
+        let listener = try NWListener(using: .tcp, on: .any)
+        let payload = Data(repeating: 0x5A, count: bytes)
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: ThrottleProxyCheck.queue)
+            connection.send(content: payload, completion: .idempotent)
+        }
+        listener.start(queue: ThrottleProxyCheck.queue)
+        while (listener.port?.rawValue ?? 0) == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        EchoServer.kept.append(listener)
+        return listener.port!.rawValue
     }
 }
 

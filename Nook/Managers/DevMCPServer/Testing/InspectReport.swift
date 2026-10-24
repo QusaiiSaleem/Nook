@@ -78,11 +78,11 @@ struct InspectReport: Codable {
             out.append("\n## \(name)")
             values.keys.sorted().forEach { out.append("- \($0): \(values[$0] ?? "")") }
         }
-        func list(_ name: String, _ items: [String]) {
+        func list(_ name: String, _ items: [String], limit: Int = Self.listLimit) {
             guard !items.isEmpty else { return }
             out.append("\n## \(name)")
-            items.prefix(Self.listLimit).forEach { out.append("- \($0)") }
-            if items.count > Self.listLimit { out.append("- +\(items.count - Self.listLimit) more") }
+            items.prefix(limit).forEach { out.append("- \($0)") }
+            if items.count > limit { out.append("- +\(items.count - limit) more") }
         }
 
         section("Facts", facts)
@@ -105,7 +105,8 @@ struct InspectReport: Codable {
                 out.append(line)
             }
         }
-        list("Could not check", unassessable)
+        // Never cut short: a hidden "not checked" line would read as a pass.
+        list("Could not check", unassessable, limit: .max)
         list("Files", files)
         return out.joined(separator: "\n")
     }

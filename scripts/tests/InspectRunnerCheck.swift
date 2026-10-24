@@ -36,6 +36,11 @@ struct InspectRunnerCheck {
         await runner_reports_one_call()
         await runner_gives_up_after_timeout()
         await runner_stops_at_its_budget()
+        await repeat_visit_says_files_came_from_cache()
+        await slowest_excludes_time_in_the_queue()
+        await inspect_runs_without_the_ad_blocker()
+        await hung_page_still_answers_and_stops()
+        await focus_check_says_where_it_stopped()
         print("InspectRunnerCheck passed")
     }
 
@@ -112,6 +117,173 @@ extension InspectRunnerCheck {
         let skipped = report.unassessable.filter { $0.contains("out of time") }
         precondition(skipped.contains { $0.contains("1280") } && skipped.contains { $0.contains("390") }, "skipped widths not listed: \(report.unassessable)")
         precondition(FileManager.default.fileExists(atPath: out.appendingPathComponent("report.json").path), "no report.json")
+    }
+}
+
+extension InspectRunnerCheck {
+    /// A second visit through the same store gets the image from the cache; the report must say so
+    /// rather than pass the revalidation's header bytes off as the page's weight.
+    @MainActor static func repeat_visit_says_files_came_from_cache() async {
+        let server = await TinyServer.start()
+        // A store of its own, removed afterwards: a non-persistent store keeps no HTTP cache
+        // between page processes, so nothing would come from the cache.
+        let storeID = UUID()
+        let store = WKWebsiteDataStore(forIdentifier: storeID)
+        func visit() async -> InspectReport {
+            let config = WKWebViewConfiguration()
+            config.websiteDataStore = store
+            let out = FileManager.default.temporaryDirectory.appendingPathComponent("irun-cache-\(UUID().uuidString)")
+            return await InspectRunner(configuration: config, outputFolder: out)
+                .run(url: URL(string: "http://127.0.0.1:\(server.port)/cache.html")!, dark: false, timeout: 10, workBudget: 0)
+        }
+        let first = await visit()
+        precondition(first.speed["cache"] == nil, "a first visit claimed the cache: \(first.speed)")
+        let second = await visit()
+        precondition(server.hits["/pixel.png"] == 1, "the image was fetched \(server.hits["/pixel.png"] ?? 0) times: no cache hit to report")
+        precondition(second.speed["cache"]?.contains("1 of 1") == true, "repeat visit not flagged: \(second.speed)")
+        server.stop()
+        try? await WKWebsiteDataStore.remove(forIdentifier: storeID)
+    }
+
+    /// Eight images that each take 300 ms, six connections at a time: the last two wait in line for
+    /// 300 ms first. "Slowest" times the request, not the wait.
+    @MainActor static func slowest_excludes_time_in_the_queue() async {
+        let server = await TinyServer.start()
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("irun-queue-\(UUID().uuidString)")
+        let report = await InspectRunner(configuration: WKWebViewConfiguration(), outputFolder: out)
+            .run(url: URL(string: "http://127.0.0.1:\(server.port)/queue.html")!, dark: false, timeout: 15, workBudget: 0)
+        // "…/slow7.png (312 ms from request to last byte); …" → [312, …]
+        let times = (report.speed["slowest"] ?? "").components(separatedBy: " ms from request").compactMap {
+            $0.components(separatedBy: "(").last.flatMap { Int($0) }
+        }
+        precondition(!times.isEmpty && times.max()! >= 250, "slow images not timed: \(report.speed)")
+        precondition(times.max()! < 450, "queue time counted as slowness: \(report.speed["slowest"] ?? "")")
+        server.stop()
+    }
+}
+
+extension InspectRunnerCheck {
+    /// Nook's own blocker must not show up as the site's broken images: inspect shows the page as a
+    /// visitor without Nook sees it, and says so.
+    @MainActor static func inspect_runs_without_the_ad_blocker() async {
+        let server = await TinyServer.start()
+        let rules = FileManager.default.temporaryDirectory.appendingPathComponent("irun-rules-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: rules, withIntermediateDirectories: true)
+        let list = try! await WKContentRuleListStore(url: rules)!.compileContentRuleList(
+            forIdentifier: "test", encodedContentRuleList: #"[{"trigger":{"url-filter":"pixel\\.png"},"action":{"type":"block"}}]"#)!
+        let config = WKWebViewConfiguration()
+        config.userContentController.add(list)
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("irun-blocker-\(UUID().uuidString)")
+        let report = await InspectRunner(configuration: config, outputFolder: out)
+            .run(url: URL(string: "http://127.0.0.1:\(server.port)/cache.html")!, dark: false, timeout: 10, workBudget: 0)
+        precondition(!report.failedLoads.contains { $0.contains("pixel.png") }, "the blocker's work reported as a failed load: \(report.failedLoads)")
+        precondition(report.facts["adBlocking"]?.contains("off") == true, "the report does not say the blocker was off: \(report.facts)")
+        server.stop()
+    }
+
+    /// A page whose scripts stop answering after load: the call still answers within its budget,
+    /// says what it could not read, and leaves no page process spinning.
+    @MainActor static func hung_page_still_answers_and_stops() async {
+        let server = await TinyServer.start()
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("irun-hung-\(UUID().uuidString)")
+        let pagesBefore = Set(pageProcesses())
+        let start = Date()
+        let report = await InspectRunner(configuration: WKWebViewConfiguration(), outputFolder: out)
+            .run(url: URL(string: "http://127.0.0.1:\(server.port)/hang.html")!, dark: true, timeout: 5, workBudget: 4)
+        let took = Date().timeIntervalSince(start)
+        precondition(took < 9, "a hung page held the call for \(took) s")
+        precondition(report.unassessable.contains { $0.contains("did not answer") }, "the hang is not reported: \(report.unassessable)")
+        try? await Task.sleep(for: .seconds(2))
+        let busy = busiestCPU(of: pageProcesses().filter { !pagesBefore.contains($0) })
+        precondition(busy < 0.5, "a page process is still spinning at \(Int(busy * 100))% CPU after the call")
+        server.stop()
+    }
+
+    /// The keyboard check presses Tab at most 40 times; past that it must say so, not pass silently.
+    @MainActor static func focus_check_says_where_it_stopped() async {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("irun-links-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("links.html")
+        try! ("<html><body>" + (1...60).map { "<p><a href=\"#l\($0)\">Link \($0)</a></p>" }.joined() + "</body></html>")
+            .write(to: file, atomically: true, encoding: .utf8)
+        let report = await InspectRunner(configuration: WKWebViewConfiguration(), outputFolder: folder.appendingPathComponent("out"))
+            .run(url: file, dark: false, timeout: 10, workBudget: 20)
+        precondition(report.unassessable.contains { $0.contains("keyboard focus") && $0.contains("40") }, "the focus cap is not reported: \(report.unassessable)")
+    }
+
+    /// Every WebKit page process on the Mac. macOS does not tie a page process to a command-line
+    /// program, so the check compares the list before and after a run.
+    static func pageProcesses() -> [pid_t] {
+        var pids = [pid_t](repeating: 0, count: 8192)
+        let n = Int(proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size)))
+        return pids.prefix(max(0, n)).filter { pid in
+            var path = [CChar](repeating: 0, count: 4096)
+            return pid > 0 && proc_pidpath(pid, &path, UInt32(path.count)) > 0 && String(cString: path).hasSuffix("com.apple.WebKit.WebContent")
+        }
+    }
+
+    /// The highest CPU share, over one second, among `pids`.
+    static func busiestCPU(of pids: [pid_t]) -> Double {
+        func cpu(_ pid: pid_t) -> UInt64 {
+            var info = rusage_info_v4()
+            let ok = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V4, $0) } }
+            return ok == 0 ? info.ri_user_time + info.ri_system_time : 0
+        }
+        let before = pids.map(cpu), t0 = mach_absolute_time()
+        Thread.sleep(forTimeInterval: 1)
+        let after = pids.map(cpu), t1 = mach_absolute_time()
+        return zip(before, after).map { $1 > $0 ? Double($1 - $0) / Double(t1 - t0) : 0 }.max() ?? 0
+    }
+}
+
+/// A tiny HTTP/1.1 server for the speed checks: a cacheable image, and slow images.
+final class TinyServer: @unchecked Sendable {
+    let listener: NWListener
+    var port: UInt16 { listener.port?.rawValue ?? 0 }
+    private let lock = NSLock()
+    private var counts: [String: Int] = [:]
+    var hits: [String: Int] { lock.lock(); defer { lock.unlock() }; return counts }
+    static let pixel = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+
+    private init(_ listener: NWListener) { self.listener = listener }
+
+    @MainActor static func start() async -> TinyServer {
+        let server = TinyServer(try! NWListener(using: .tcp, on: .any))
+        server.listener.newConnectionHandler = { connection in
+            connection.start(queue: .global())
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, _, _ in
+                let line = String(decoding: data ?? Data(), as: UTF8.self).split(separator: "\r\n").first ?? ""
+                let path = line.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+                server.answer(path, on: connection)
+            }
+        }
+        server.listener.start(queue: .global())
+        while server.port == 0 { try? await Task.sleep(for: .milliseconds(20)) }
+        return server
+    }
+
+    func stop() { listener.cancel() }
+
+    private func answer(_ path: String, on connection: NWConnection) {
+        lock.lock(); counts[path, default: 0] += 1; lock.unlock()
+        var body = Data("not found".utf8), type = "text/plain", cache = "no-store", delay = 0.0
+        switch path {
+        case "/cache.html":
+            body = Data("<html><body><img src=\"/pixel.png\"></body></html>".utf8); type = "text/html"
+        case "/pixel.png":
+            body = Self.pixel; type = "image/png"; cache = "max-age=3600"
+        case "/queue.html":
+            body = Data(("<html><body>" + (1...8).map { "<img src=\"/slow\($0).png\">" }.joined() + "</body></html>").utf8); type = "text/html"
+        case "/hang.html":
+            body = Data("<html><body><p>Loaded, then stuck</p><script>addEventListener('load', () => setTimeout(() => { for (;;) {} }, 50))</script></body></html>".utf8); type = "text/html"
+        case let slow where slow.hasPrefix("/slow"):
+            body = Self.pixel; type = "image/png"; delay = 0.3
+        default: break
+        }
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nCache-Control: \(cache)\r\nConnection: close\r\n\r\n"
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+            connection.send(content: Data(head.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
+        }
     }
 }
 

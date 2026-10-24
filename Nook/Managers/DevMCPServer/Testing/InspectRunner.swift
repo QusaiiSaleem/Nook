@@ -29,6 +29,8 @@ private final class AnswerOnce {
 @MainActor
 final class InspectRunner: NSObject, WKNavigationDelegate {
     static let widths = [390, 820, 1280, 1600]
+    /// How many Tab presses the keyboard check makes.
+    static let tabPresses = 40
     static let height: CGFloat = 900
 
     /// The pictures for the MCP answer, after `run`.
@@ -39,6 +41,10 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
     private var finished = false
     private var status: Int?
     private var redirects: [String] = []
+    /// Every step after the load shares one deadline, so the call answers in time.
+    private var workDeadline = Date.distantFuture
+    /// Whether a step gave up on the page; then its process is ended.
+    private var timedOut = false
 
     init(configuration: WKWebViewConfiguration, outputFolder: URL) {
         self.configuration = configuration
@@ -50,6 +56,10 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
     /// before its own deadline with the widths it did not reach listed, never passed.
     func run(url: URL, dark: Bool = true, timeout: TimeInterval = 20, network: String? = nil,
              workBudget: TimeInterval = 30) async -> InspectReport {
+        // The page as a visitor without Nook sees it: Nook's blocker would show up as the site's own
+        // broken images, and only its rule lists (not its per-page scripts) would apply here anyway.
+        configuration.userContentController.removeAllContentRuleLists()
+        configuration.userContentController.removeAllUserScripts()
         configuration.userContentController.addUserScript(InspectScripts.capture)
         // Tab reaches links too, so the focus check sees every control.
         if let preferences = configuration.preferences.copy() as? WKPreferences {
@@ -70,6 +80,10 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
         defer {
             webView.stopLoading()
             webView.navigationDelegate = nil
+            // A page that stopped answering keeps its process spinning after the call; end it.
+            // (`_killWebContentProcess` only asks, and a looping process never reads the request.)
+            let kill = NSSelectorFromString("_killWebContentProcessAndResetState")
+            if timedOut, webView.responds(to: kill) { webView.perform(kill) }
             window.orderOut(nil)
             window.close()
         }
@@ -88,7 +102,7 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
             partial: partial, network: network, facts: [:], speed: [:], errors: [], failedLoads: [], findings: [],
             unassessable: [], files: [])
         try? FileManager.default.createDirectory(at: outputFolder, withIntermediateDirectories: true)
-        let workDeadline = Date().addingTimeInterval(workBudget)
+        workDeadline = Date().addingTimeInterval(workBudget)
         func inTime(_ step: String) -> Bool {
             if Date() < workDeadline { return true }
             report.unassessable.append("\(step): not checked, out of time")
@@ -99,6 +113,7 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
         await settle(webView)
         _ = await evaluate(webView, InspectScripts.freeze)
         report.facts = Self.facts(Self.object(await evaluate(webView, InspectScripts.facts)))
+        report.facts["adBlocking"] = "off: the page as a visitor without Nook sees it"
         if !redirects.isEmpty { report.facts["redirects"] = redirects.joined(separator: " → ") }
         if let memory = Self.memoryMB(of: webView) { report.facts["memory"] = "\(memory) MB" } else {
             report.unassessable.append("memory: the page's process could not be read")
@@ -106,7 +121,11 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
         report.speed = Self.speed(Self.object(await evaluate(webView, InspectScripts.speed)), facts: report.facts)
 
         var findings: [InspectFinding] = []
-        if inTime("keyboard focus") { findings += await focusFindings(webView, window: window) }
+        if inTime("keyboard focus") {
+            let focus = await focusFindings(webView, window: window)
+            findings += focus.findings
+            report.unassessable += focus.unassessable
+        }
         for width in [1280, 390, 820, 1600] {
             guard inTime("width \(width)") else { continue }
             resize(window, webView, width: width)
@@ -140,6 +159,9 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
         report.errors = (captured["console"] as? [String] ?? []) + (captured["errors"] as? [String] ?? [])
         report.failedLoads = captured["failed"] as? [String] ?? []
         report.findings = InspectReport.merge(findings)
+        if timedOut {
+            report.unassessable.insert("page scripts did not answer within the time allowed: facts, speed, errors and findings after that point are missing", at: 0)
+        }
 
         let reportFile = outputFolder.appendingPathComponent("report.json")
         report.files.insert(reportFile.path, at: 0)
@@ -168,12 +190,18 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
 
     /// Real Tab presses (browsers show focus styles only after keyboard use), comparing each
     /// focused control with how it looked unfocused.
-    private func focusFindings(_ webView: WKWebView, window: NSWindow) async -> [InspectFinding] {
-        guard Int((await evaluate(webView, InspectScripts.focusBaseline)) ?? "0") ?? 0 > 0 else { return [] }
+    private func focusFindings(_ webView: WKWebView, window: NSWindow) async -> (findings: [InspectFinding], unassessable: [String]) {
+        let controls = Int((await evaluate(webView, InspectScripts.focusBaseline)) ?? "0") ?? 0
+        guard controls > 0 else { return ([], []) }
         window.makeFirstResponder(webView)
-        var seen = Set<String>()
+        var seen = Set<Int>()
         var findings: [InspectFinding] = []
-        for _ in 0..<40 {
+        var unassessable: [String] = []
+        if controls > InspectScripts.focusSampleLimit {
+            unassessable.append("keyboard focus: compared the first \(InspectScripts.focusSampleLimit) of \(controls) controls")
+        }
+        var wrapped = false
+        for _ in 0..<Self.tabPresses {
             for type in [NSEvent.EventType.keyDown, .keyUp] {
                 if let event = NSEvent.keyEvent(
                     with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -184,18 +212,21 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
             }
             await settle(webView)
             let state = Self.object(await evaluate(webView, InspectScripts.focusCheck))
-            guard let selector = state["selector"] as? String else { continue }
-            if seen.contains(selector) { break }
-            seen.insert(selector)
+            guard let selector = state["selector"] as? String, let index = state["index"] as? Int else { continue }
+            if seen.contains(index) { wrapped = true; break }
+            seen.insert(index)
             if state["changed"] as? Bool == false {
                 findings.append(InspectFinding(
                     severity: "warning", rule: "focus-visible", message: "No visible change when focused with the keyboard",
                     width: nil, selector: selector, fix: "add a :focus-visible outline"))
             }
         }
+        if !wrapped, seen.count >= Self.tabPresses {
+            unassessable.append("keyboard focus: checked the first \(Self.tabPresses) controls reached by Tab")
+        }
         // The pictures that follow show the page as loaded, not the last control the check reached.
         _ = await evaluate(webView, "if (document.activeElement) { document.activeElement.blur(); } 'ok'")
-        return findings
+        return (findings, unassessable)
     }
 
     private func resize(_ window: NSWindow, _ webView: WKWebView, width: Int) {
@@ -214,7 +245,7 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
     }
 
     private func evaluate(_ webView: WKWebView, _ js: String) async -> String? {
-        await bounded(10) {
+        await bounded(10, counted: true) {
             await withCheckedContinuation { continuation in
                 webView.evaluateJavaScript(js, in: nil, in: .page) { result in
                     if case .success(let value) = result { continuation.resume(returning: value as? String) }
@@ -226,7 +257,11 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
 
     /// WebKit's callbacks cannot be cancelled, so a page that never answers would hold the whole
     /// call: whichever of the work and the timer finishes first answers, and the other is ignored.
-    private func bounded<T>(_ seconds: TimeInterval, _ work: @escaping @MainActor () async -> T?) async -> T? {
+    /// Each step waits at most `seconds` and never past the shared deadline (half a second at
+    /// least, so a late step can still read something). A `counted` step that runs out means the
+    /// page stopped answering.
+    private func bounded<T>(_ seconds: TimeInterval, counted: Bool = false, _ work: @escaping @MainActor () async -> T?) async -> T? {
+        let seconds = min(seconds, max(0.5, workDeadline.timeIntervalSinceNow))
         let once = AnswerOnce()
         return await withCheckedContinuation { continuation in
             Task { @MainActor in
@@ -234,7 +269,11 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
                 if !once.done { once.done = true; continuation.resume(returning: value) }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-                if !once.done { once.done = true; continuation.resume(returning: nil) }
+                if !once.done {
+                    once.done = true
+                    if counted { self.timedOut = true }
+                    continuation.resume(returning: nil)
+                }
             }
         }
     }
@@ -278,6 +317,9 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
         for key in ["ttfb", "fcp", "lcp", "domReady", "load"] { if let ms = raw[key] as? Int { speed[key] = "\(ms) ms" } }
         if raw["lcp"] == nil || raw["lcp"] is NSNull { speed["lcp"] = "not reported" }
         if let requests = raw["requests"] as? Int { speed["requests"] = "\(requests)" }
+        if let cached = raw["fromCache"] as? Int, cached > 0, let requests = raw["requests"] as? Int {
+            speed["cache"] = "\(cached) of \(requests) files came from the browser cache: a repeat visit, so pageWeight leaves them out; inspect with network for a first visit"
+        }
         if let total = raw["totalBytes"] as? Int { speed["pageWeight"] = bytes(total + (raw["documentBytes"] as? Int ?? 0)) }
         if let share = raw["thirdPartyShare"] as? Int { speed["thirdParty"] = "\(share)%" }
         if let byType = raw["bytesByType"] as? [String: Int], !byType.isEmpty {
@@ -291,7 +333,7 @@ final class InspectRunner: NSObject, WKNavigationDelegate {
             if !items.isEmpty { speed[key] = items.joined(separator: "; ") }
         }
         list("heaviest", bytes, "bytes")
-        list("slowest", { "\($0) ms" }, "ms")
+        list("slowest", { "\($0) ms from request to last byte" }, "ms")
         return speed
     }
 

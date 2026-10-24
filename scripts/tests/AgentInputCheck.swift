@@ -1,7 +1,7 @@
 // Licensed under GPL-3.0. See LICENSE.
 //
 //  swiftc -parse-as-library Nook/Managers/DevMCPServer/Testing/AgentInput.swift \
-//         scripts/tests/AgentInputCheck.swift -o /tmp/ai && /tmp/ai
+//         Nook/Managers/BrowserManager/AgentPageHostView.swift scripts/tests/AgentInputCheck.swift -o /tmp/ai && /tmp/ai
 //
 //  MCP `type`: text and keys reach the page as trusted events (as a person's typing does, which
 //  sites that ignore script-made events need), Arabic arrives intact, and the keyboard goes back
@@ -77,6 +77,60 @@ struct AgentInputCheck {
         do { _ = try await AgentInput.type("x", keys: [], into: web, selector: "#missing") } catch { threw = true }
         precondition(threw, "a selector that matches nothing must fail, not type somewhere else")
 
+        // A field that exists but cannot take focus is not "missing": say why.
+        _ = try await web.evaluateJavaScript("document.body.insertAdjacentHTML('beforeend', '<input id=\"folded\" style=\"display:none\">'); 1")
+        var reason = ""
+        do { _ = try await AgentInput.type("x", keys: [], into: web, selector: "#folded") } catch { reason = error.localizedDescription }
+        precondition(reason.contains("cannot take focus"), "a hidden field was reported as: \(reason)")
+
+        await overlapping_calls_never_keep_the_keyboard(window: window, field: field, web: web)
+        await escape_stays_with_the_agent_page()
         print("AgentInputCheck passed")
     }
+
+    /// Two agents calling `type` at once must not mix their text or leave the person's keyboard
+    /// on the hidden page.
+    @MainActor static func overlapping_calls_never_keep_the_keyboard(window: NSWindow, field: NSTextField, web: WKWebView) async {
+        _ = try? await web.evaluateJavaScript("document.getElementById('field').value = ''; 1")
+        window.makeFirstResponder(field)
+        async let first = try? AgentInput.type("first", keys: [], into: web, selector: "#field")
+        async let second = try? AgentInput.type("second", keys: ["ArrowLeft", "ArrowRight", "ArrowLeft"], into: web, selector: "#field")
+        let results = await [first, second]
+        let value = (try? await web.evaluateJavaScript("document.getElementById('field').value")) as? String ?? ""
+        precondition(value == "first" || value == "second", "two calls mixed their text: \(value) (results \(results))")
+        precondition(results.contains { $0 == nil }, "both overlapping calls ran")
+        let responder = window.firstResponder
+        let backToField = responder === field || ((responder as? NSTextView)?.delegate === field)
+        precondition(backToField, "the keyboard stayed with \(String(describing: responder))")
+    }
+
+    /// An Escape the agent's page does not use must stop at the page's hidden holder: in the app,
+    /// the window would take it as the person's own Escape and close their Peek or full screen.
+    @MainActor static func escape_stays_with_the_agent_page() async {
+        let window = CountingWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 800, height: 600),
+                                    styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let host = AgentPageHostView(frame: content.bounds)
+        let web = WKWebView(frame: host.bounds)
+        web.perform(NSSelectorFromString("_setWindowOcclusionDetectionEnabled:"), with: NSNumber(value: false))
+        let loads = Loads()
+        web.navigationDelegate = loads
+        host.addSubview(web)
+        content.addSubview(host)
+        window.contentView = content
+        window.orderBack(nil)
+        web.loadHTMLString("<html><body><input id='x'></body></html>", baseURL: URL(string: "https://example.test/"))
+        let end = Date().addingTimeInterval(10)
+        while loads.finished == 0, Date() < end { try? await Task.sleep(for: .milliseconds(20)) }
+        _ = try? await AgentInput.type(nil, keys: ["Escape"], into: web, selector: "#x")
+        try? await Task.sleep(for: .milliseconds(200))
+        precondition(window.cancels == 0, "the agent's Escape reached the window \(window.cancels) time(s)")
+    }
+}
+
+/// Counts the Escapes (cancelOperation:) that reach the window.
+final class CountingWindow: NSWindow {
+    var cancels = 0
+    override func cancelOperation(_ sender: Any?) { cancels += 1 }
 }
