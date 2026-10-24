@@ -53,6 +53,7 @@ extension TabTree {
                 changed = true
             }
         }
+        if repairSplits(now: now) { changed = true }
         return changed
     }
 

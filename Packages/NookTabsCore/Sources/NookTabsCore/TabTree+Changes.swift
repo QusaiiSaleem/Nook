@@ -48,6 +48,7 @@ extension TabTree {
     @discardableResult
     public mutating func move(_ id: UUID, to parent: Parent, after: UUID?, currentURL: URL? = nil, now: Date = Date()) throws -> Change {
         guard var moving = item(id) else { throw TreeError.missingItem }
+        let fromSplit = split(holding: id)?.id
         // Trails live in the Tabs section only. Moving into pinned or favorites flattens every
         // trail in the moved subtree, parents first, so each child lands right after its parent.
         // A parent tab moved alone leaves its children in its place and validates as a plain tab;
@@ -66,6 +67,7 @@ extension TabTree {
             moving.kind = .tab(url: currentURL, pageTitle: title)
             record(&change, item: moving)
         }
+        if let fromSplit, parent != .folder(itemID: fromSplit) { collapseSplit(fromSplit, change: &change, now: now) }
         return change
     }
 
@@ -110,11 +112,13 @@ extension TabTree {
     /// `promotingChildren` closes a parent tab alone: its children first move up into its place.
     public mutating func close(_ id: UUID, promotingChildren: Bool = false, now: Date = Date()) throws -> (change: Change, closed: ClosedEntry) {
         guard let target = item(id), let section = section(of: id) else { throw TreeError.missingItem }
+        let fromSplit = split(holding: id)?.id
         var change = Change()
         if promotingChildren, !target.isFolder { promoteChildren(of: id, change: &change, now: now) }
         let ids = subtree(of: id)
         let closedItems = ids.compactMap { items[$0] }
         for itemID in ids { remove(&change, itemID: itemID, now: now) }
+        if let fromSplit { collapseSplit(fromSplit, change: &change, now: now) }
         return (change, ClosedEntry(items: closedItems, section: section, closedAt: now))
     }
 
@@ -214,10 +218,12 @@ extension TabTree {
             if let id, id == folderID || chain.folders.contains(id) { throw TreeError.cycle }
             if host.isFolder {
                 if case .favorites = chain.section { throw TreeError.folderInFavorites }
+                if host.split != nil { try validateSplitChild(of: folderID, placing: id, isFolder: isFolder) }
             } else {
                 // A trail: a tab in the Tabs section holding tabs.
                 guard case .tabs = chain.section else { throw TreeError.childOutsideTabs }
                 if isFolder { throw TreeError.folderInTab }
+                if split(holding: folderID) != nil { throw TreeError.childInSplit }
             }
             // The new position sits inside the folder plus its ancestors.
             let depth = chain.folders.count + 1
@@ -229,7 +235,7 @@ extension TabTree {
 
     // MARK: - Helpers
 
-    private mutating func record(_ change: inout Change, item: Item) {
+    mutating func record(_ change: inout Change, item: Item) {
         if change.items[item.id] == nil { change.items[item.id] = .some(items[item.id]) }
         items[item.id] = item
     }
@@ -239,7 +245,7 @@ extension TabTree {
         spaces[space.id] = space
     }
 
-    private mutating func remove(_ change: inout Change, itemID: UUID, now: Date) {
+    mutating func remove(_ change: inout Change, itemID: UUID, now: Date) {
         guard var target = items[itemID] else { return }
         if change.items[itemID] == nil { change.items[itemID] = .some(target) }
         if scope(of: itemID) == .synced {
@@ -252,7 +258,7 @@ extension TabTree {
     }
 
     /// Moves a tab's children up into its place, right after it, in their order.
-    private mutating func promoteChildren(of id: UUID, change: inout Change, now: Date) {
+    mutating func promoteChildren(of id: UUID, change: inout Change, now: Date) {
         guard let host = items[id] else { return }
         var after = id
         for child in children(of: .folder(itemID: id)) {
@@ -280,7 +286,7 @@ extension TabTree {
 
     /// A key for a new position after `after` among `parent`'s children. Renumbers the siblings
     /// (recorded in `change`) when no key fits between the neighbors.
-    private mutating func placeKey(in parent: Parent, after: UUID?, excluding id: UUID, change: inout Change, now: Date) -> OrderKey {
+    mutating func placeKey(in parent: Parent, after: UUID?, excluding id: UUID, change: inout Change, now: Date) -> OrderKey {
         let siblings = children(of: parent).filter { $0.id != id }
         let index = after.flatMap { a in siblings.firstIndex(where: { $0.id == a }) }.map { $0 + 1 } ?? 0
         let lower = index > 0 ? siblings[index - 1].order : nil

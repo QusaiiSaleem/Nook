@@ -74,6 +74,27 @@ public struct LiveSource: RawRepresentable, Codable, Hashable, Sendable {
     }
 }
 
+/// Marks a folder as a saved split: two tabs shown side by side (`TabTree+Splits.swift`).
+/// An optional field, so a build without splits reads the split as a plain folder.
+public struct SplitInfo: Codable, Hashable, Sendable {
+    /// The left pane's share of the width.
+    public var fraction: Double
+    /// Whether the right pane was the one in use.
+    public var focusRight: Bool
+
+    public static let minFraction = 0.25
+
+    public init(fraction: Double = 0.5, focusRight: Bool = false) {
+        self.fraction = fraction
+        self.focusRight = focusRight
+    }
+
+    /// Keeps each pane at least `minFraction` of the width.
+    public func clamped() -> SplitInfo {
+        SplitInfo(fraction: min(max(fraction, Self.minFraction), 1 - Self.minFraction), focusRight: focusRight)
+    }
+}
+
 public struct Item: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public var parent: Parent
@@ -84,17 +105,22 @@ public struct Item: Identifiable, Codable, Hashable, Sendable {
     public var deletedAt: Date?
     /// Set on a folder whose tabs follow a source (`reconcileLive`).
     public var live: LiveSource?
+    /// Set on a folder that is a saved split of its two tabs.
+    public var split: SplitInfo?
 
-    public init(id: UUID = UUID(), parent: Parent, order: OrderKey, kind: ItemKind, customTitle: String? = nil, modifiedAt: Date = Date(), deletedAt: Date? = nil, live: LiveSource? = nil) {
+    public init(id: UUID = UUID(), parent: Parent, order: OrderKey, kind: ItemKind, customTitle: String? = nil, modifiedAt: Date = Date(), deletedAt: Date? = nil, live: LiveSource? = nil, split: SplitInfo? = nil) {
         self.id = id
         self.parent = parent
         self.order = order
         self.kind = kind
         self.customTitle = customTitle
         self.live = live
+        self.split = split
         self.modifiedAt = modifiedAt
         self.deletedAt = deletedAt
     }
+
+    public var isSplit: Bool { isFolder && split != nil }
 
     public var isFolder: Bool {
         if case .folder = kind { return true }
@@ -160,4 +186,9 @@ public enum TreeError: Error, Equatable, Sendable {
     case childOutsideTabs
     case notATab
     case lastSpace
+    /// A split holds two tabs and nothing else.
+    case splitHoldsTabsOnly
+    case splitFull
+    /// A tab in a split holds no children.
+    case childInSplit
 }

@@ -11,7 +11,8 @@ extension TabTree {
             for child in groups[parent] ?? [] {
                 let hasChildren = !child.isFolder && groups[.folder(itemID: child.id)] != nil
                 rows.append(Row(item: child, depth: depth, section: section, hasChildren: hasChildren))
-                if child.isFolder || hasChildren, openFolders.contains(child.id) {
+                // A split is one row; its two tabs are drawn inside it.
+                if (child.isFolder && !child.isSplit) || hasChildren, openFolders.contains(child.id) {
                     walk(.folder(itemID: child.id), depth: depth + 1, section: section)
                 }
             }
@@ -38,7 +39,7 @@ extension TabTree {
                 return (moving.parent, position > 0 ? siblings[position - 1].id : nil)
             }
         }
-        if intoFolder, slot < rows.count, rows[slot].item.isFolder, rows[slot].item.id != dragged {
+        if intoFolder, slot < rows.count, rows[slot].item.isFolder, !rows[slot].item.isSplit, rows[slot].item.id != dragged {
             return (.folder(itemID: rows[slot].item.id), nil)
         }
         let parent = slot < rows.count ? rows[slot].item.parent : section
