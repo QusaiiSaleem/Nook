@@ -11,10 +11,21 @@
 import AppKit
 import WebKit
 
+/// Counts finished navigations: polling document.readyState can read the previous document,
+/// which already says "complete" before the new one has started.
+@MainActor
+final class Loads: NSObject, WKNavigationDelegate {
+    var finished = 0
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finished += 1 }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { finished += 1 }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { finished += 1 }
+}
+
 @main
 struct InspectScriptsCheck {
     @MainActor static var window: NSWindow!
     @MainActor static var web: WKWebView!
+    @MainActor static let loads = Loads()
 
     static let pixel = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
@@ -67,6 +78,7 @@ struct InspectScriptsCheck {
                           styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         web = WKWebView(frame: NSRect(x: 0, y: 0, width: 1280, height: 900), configuration: config)
+        web.navigationDelegate = loads
         window.contentView = web
         window.orderBack(nil)
 
@@ -157,8 +169,9 @@ struct InspectScriptsCheck {
 
     @MainActor static func load(_ html: String) {
         resize(1280)
+        let before = loads.finished
         web.loadHTMLString(html, baseURL: URL(string: "https://example.test/"))
-        precondition(waitUntil { (evaluate("document.readyState") as? String) == "complete" }, "page never loaded")
+        precondition(waitUntil(20) { loads.finished > before }, "page never loaded")
     }
 
     static func json(_ string: String?) -> [String: Any] {
