@@ -170,6 +170,18 @@ extension TabTree {
         return change
     }
 
+    /// Sets or clears (nil) the mark a space shows in place of its dot.
+    @discardableResult
+    public mutating func setSpaceMark(_ id: UUID, mark: SpaceMark?, now: Date = Date()) throws -> Change {
+        guard var target = space(id) else { throw TreeError.missingSpace }
+        guard target.mark != mark else { return Change() }
+        target.mark = mark
+        target.modifiedAt = now
+        var change = Change()
+        record(&change, space: target)
+        return change
+    }
+
     /// Reorders a space, placing it directly after `after` (nil = first).
     @discardableResult
     public mutating func moveSpace(_ id: UUID, after: UUID?, now: Date = Date()) throws -> Change {

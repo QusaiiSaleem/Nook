@@ -11,8 +11,13 @@ public struct SpaceRecord: Identifiable, Codable, Hashable, Sendable {
     public var order: OrderKey
     public var modifiedAt: Date
     public var deletedAt: Date?
+    /// Shown in place of the space's dot in the switcher; nil keeps the dot. Not `icon`, which
+    /// carries the Agent space's marker. Files from before it existed decode with none; a build
+    /// from before it drops it on its next save.
+    public var mark: SpaceMark?
 
-    public init(id: UUID = UUID(), name: String, icon: String, accentHex: String, order: OrderKey, modifiedAt: Date = Date(), deletedAt: Date? = nil) {
+    public init(id: UUID = UUID(), name: String, icon: String, accentHex: String, order: OrderKey, modifiedAt: Date = Date(),
+                deletedAt: Date? = nil, mark: SpaceMark? = nil) {
         self.id = id
         self.name = name
         self.icon = icon
@@ -20,6 +25,58 @@ public struct SpaceRecord: Identifiable, Codable, Hashable, Sendable {
         self.order = order
         self.modifiedAt = modifiedAt
         self.deletedAt = deletedAt
+        self.mark = mark
+    }
+}
+
+/// A space's mark: an emoji, or a small picture made from an SVG the person chose. The SVG is
+/// drawn once, when chosen, into a `picturePixels`-wide PNG; only the PNG is kept and shown, so
+/// a costly SVG can never slow every redraw (measured: a 141-byte SVG took 1 GB per draw).
+public enum SpaceMark: Codable, Hashable, Sendable {
+    case emoji(String)
+    case picture(Data)
+
+    /// Larger SVGs are refused before they are drawn.
+    public static let svgLimit = 64 * 1024
+    /// The width and height of a picture mark, in pixels (2x the switcher's icon).
+    public static let picturePixels = 64
+
+    /// The first character of `text` when it is an emoji, else nil.
+    public static func emoji(from text: String) -> SpaceMark? {
+        guard let first = text.trimmingCharacters(in: .whitespacesAndNewlines).first else { return nil }
+        let scalars = first.unicodeScalars
+        // Digits, # and * carry the emoji property for keycaps, so a scalar counts when it shows
+        // as emoji by default, sits past the plain-text symbols, or is asked for in emoji style
+        // (U+FE0F) or as a keycap (U+20E3): ©️ ⌨️ 1️⃣.
+        let styled = scalars.contains { $0.value == 0xFE0F || $0.value == 0x20E3 }
+        let isEmoji = scalars.contains { $0.properties.isEmojiPresentation || ($0.properties.isEmoji && ($0.value > 0x238C || styled)) }
+        return isEmoji ? .emoji(String(first)) : nil
+    }
+
+    /// Whether `data` is an SVG worth drawing: at most `svgLimit` bytes, and none of the features
+    /// that let a small file take seconds or gigabytes to draw or reach outside itself (measured
+    /// 2026-10-24: nested <use> 6.7 s and 1.8 GB; a blur filter never finished).
+    public static func acceptsSVG(_ data: Data) -> Bool {
+        guard data.count <= svgLimit else { return false }
+        let text = String(decoding: data, as: UTF8.self).lowercased()
+        guard text.contains("<svg") else { return false }
+        return !["<use", "<filter", "<image", "<foreignobject", "<!entity", "<!doctype"].contains { text.contains($0) }
+    }
+}
+
+extension SpaceRecord {
+    /// A mark kind from a newer build reads as none: failing here would fail the whole tab file,
+    /// and the person would be left with a read-only session.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        icon = try c.decode(String.self, forKey: .icon)
+        accentHex = try c.decode(String.self, forKey: .accentHex)
+        order = try c.decode(OrderKey.self, forKey: .order)
+        modifiedAt = try c.decode(Date.self, forKey: .modifiedAt)
+        deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+        mark = (try? c.decodeIfPresent(SpaceMark.self, forKey: .mark)) ?? nil
     }
 }
 

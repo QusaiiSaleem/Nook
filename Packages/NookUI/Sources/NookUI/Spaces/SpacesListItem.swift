@@ -87,6 +87,11 @@ struct SpacesListItem: View {
             Image(systemName: "sparkles")
                 .font(.system(size: NookDesign.Size.spaceIcon, weight: .semibold))
                 .foregroundStyle(NookDesign.Surface.agentGradient)
+        } else if let mark = space.mark {
+            // The person's own mark replaces the dot; dimmed like a dot when not the active space.
+            SpaceMarkView(mark: mark, size: NookDesign.Size.spaceIcon)
+                .opacity(isActive ? 1 : NookDesign.Surface.inactiveMarkOpacity)
+                .animation(NookDesign.Motion.standard, value: isActive)
         } else {
             plainDot
         }

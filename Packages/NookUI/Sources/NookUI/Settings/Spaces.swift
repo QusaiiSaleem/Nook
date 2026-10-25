@@ -9,6 +9,7 @@
 
 import NookTabsCore
 import SwiftUI
+import UniformTypeIdentifiers
 import NookDesign
 import NookWeb
 
@@ -19,6 +20,10 @@ public struct SpacesSettingsView: View {
     /// Cookie and record counts per space, filled in as each store answers.
     @State private var stats: [UUID: String] = [:]
     @State private var showAccentPickerFor: UUID?
+    @State private var showMarkPickerFor: UUID?
+    /// The space whose mark is being chosen from an SVG file.
+    @State private var importingMarkFor: UUID?
+    @State private var markProblem = false
 
     public init() {}
 
@@ -43,6 +48,20 @@ public struct SpacesSettingsView: View {
         }
         .formStyle(.grouped)
         .task(id: tabs.orderedSpaces.count) { await refreshStats() }
+        .fileImporter(isPresented: Binding(
+            get: { importingMarkFor != nil },
+            set: { if !$0 { importingMarkFor = nil } }
+        ), allowedContentTypes: [.svg]) { result in
+            guard let spaceID = importingMarkFor else { return }
+            importingMarkFor = nil
+            guard case .success(let url) = result else { return }
+            Task { await setMark(fromSVG: url, for: spaceID) }
+        }
+        .alert("That SVG can't be used", isPresented: $markProblem) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Choose an SVG of at most 64 KB without filters, linked images or reused shapes.")
+        }
     }
 
     @ViewBuilder
@@ -64,6 +83,33 @@ public struct SpacesSettingsView: View {
                     get: { space.accentHex },
                     set: { tabs.updateSpace(space.id, name: nil, icon: nil, accentHex: $0) }
                 ))
+                .padding(NookDesign.Spacing.lg)
+            }
+
+            // The mark that replaces this space's dot in the switcher (SpaceMarkPicker).
+            Button {
+                showMarkPickerFor = space.id
+            } label: {
+                Group {
+                    if let mark = space.mark {
+                        SpaceMarkView(mark: mark, size: NookDesign.Size.spaceIcon)
+                    } else {
+                        Image(systemName: "face.smiling")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: NookDesign.Size.iconButton, height: NookDesign.Size.iconButton)
+            }
+            .buttonStyle(.plain)
+            .help("Mark")
+            .popover(isPresented: Binding(
+                get: { showMarkPickerFor == space.id },
+                set: { if !$0 { showMarkPickerFor = nil } }
+            )) {
+                SpaceMarkPicker(space: space) {
+                    showMarkPickerFor = nil
+                    importingMarkFor = space.id
+                }
                 .padding(NookDesign.Spacing.lg)
             }
 
@@ -94,6 +140,23 @@ public struct SpacesSettingsView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
         }
+    }
+
+    // MARK: - Mark
+
+    /// Checks the SVG, draws it once into the small PNG the mark keeps, and sets it.
+    private func setMark(fromSVG url: URL, for spaceID: UUID) async {
+        let scoped = url.startAccessingSecurityScopedResource()
+        let data = try? Data(contentsOf: url)
+        if scoped { url.stopAccessingSecurityScopedResource() }
+        #if canImport(AppKit)
+        if let data, SpaceMark.acceptsSVG(data),
+           let png = await SpaceMarkRenderer.png(fromSVG: data, pixels: SpaceMark.picturePixels) {
+            tabs.setSpaceMark(spaceID, mark: .picture(png))
+            return
+        }
+        #endif
+        markProblem = true
     }
 
     // MARK: - Data

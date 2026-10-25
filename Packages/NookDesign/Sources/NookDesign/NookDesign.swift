@@ -150,6 +150,7 @@ public enum NookDesign {
         public static let mediaScrim = Color.black.opacity(0.35)           // controls over video
         public static let hairline = Color.primary.opacity(0.08)
         public static let unloadedOpacity: Double = 0.55
+        public static let inactiveMarkOpacity: Double = 0.5               // a space's mark in the switcher when another space is active
         public static let dropBorderIdle = Color.secondary.opacity(0.3)    // dashed empty-state drop target
         public static let dropBorderActive = Color.primary.opacity(0.4)    // dashed drop target while dragging
         /// Destructive action fill. Kept at the value the dialog buttons shipped with.
