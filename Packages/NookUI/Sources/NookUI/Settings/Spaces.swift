@@ -21,8 +21,11 @@ public struct SpacesSettingsView: View {
     @State private var stats: [UUID: String] = [:]
     @State private var showAccentPickerFor: UUID?
     @State private var showMarkPickerFor: UUID?
-    /// The space whose mark is being chosen from an SVG file.
+    /// The space whose mark is being chosen from an SVG file. Kept apart from `choosingSVG`:
+    /// SwiftUI clears the presentation binding before it calls the importer's completion, so a
+    /// space id stored in that binding was always gone and the chosen file was silently dropped.
     @State private var importingMarkFor: UUID?
+    @State private var choosingSVG = false
     @State private var markProblem = false
 
     public init() {}
@@ -48,10 +51,7 @@ public struct SpacesSettingsView: View {
         }
         .formStyle(.grouped)
         .task(id: tabs.orderedSpaces.count) { await refreshStats() }
-        .fileImporter(isPresented: Binding(
-            get: { importingMarkFor != nil },
-            set: { if !$0 { importingMarkFor = nil } }
-        ), allowedContentTypes: [.svg]) { result in
+        .fileImporter(isPresented: $choosingSVG, allowedContentTypes: [.svg]) { result in
             guard let spaceID = importingMarkFor else { return }
             importingMarkFor = nil
             guard case .success(let url) = result else { return }
@@ -109,6 +109,7 @@ public struct SpacesSettingsView: View {
                 SpaceMarkPicker(space: space) {
                     showMarkPickerFor = nil
                     importingMarkFor = space.id
+                    choosingSVG = true
                 }
                 .padding(NookDesign.Spacing.lg)
             }
