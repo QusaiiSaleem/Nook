@@ -88,6 +88,17 @@ struct MoreMenuView: View {
                     }
                 }
 
+                // This tab as an iPhone shows it (MobileView), until the tab closes.
+                if let session = browserManager.tabs.selectedSession(in: windowState), !session.isAgentPage {
+                    MoreMenuItem(
+                        icon: "iphone",
+                        iconColor: .green,
+                        label: "Mobile View",
+                        detail: session.isMobileView ? "On" : "Off",
+                        action: { session.setMobileView(!session.isMobileView) }
+                    )
+                }
+
                 // Nook-wide, not per site: WebKit exposes no per-origin delegate for location on
                 // macOS, so this opens the System Settings pane that actually governs it rather
                 // than implying this site can be changed here.
