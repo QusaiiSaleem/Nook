@@ -14,6 +14,17 @@ small, clearly marked changes, so official releases merge cleanly.
 - **Capture Full Page**: the camera button in the address bar saves the whole page as a PNG and
   copies it.
 - **Magic Mouse**: one-finger swipe on the sidebar switches Spaces, as in Arc.
+- **WhatsApp in Spaces**: Mac notifications from any site that asks, unread counts on Favorites,
+  and per Space an optional local, searchable copy of WhatsApp ("Keep a Local Copy" in the
+  WhatsApp site menu). The copy stays on this Mac and only reads.
+- **Auto-archive**: a Today tab nobody looked at for 12 hours closes into History, as in Arc.
+- **Capture Area**: the camera menu marks a part of the page, with an arrow or a highlight.
+- **Idle favorites unload**: idle Favorites and pinned tabs give their memory back, except pages
+  that alert you, show unread counts, keep WhatsApp's copy, hold typed text, or are in full screen.
+- **Mobile View**: ⋯ More → Mobile View shows a tab as an iPhone would.
+- **Space marks**: an emoji or your own SVG in place of a Space's dot (Settings > Spaces).
+- **Agent testing tools** for Claude Code (Developer Mode + Browser Control): `inspect`, `type`,
+  `upload`, `record_start`/`record_stop` and slow-network profiles.
 - Its own app ID (`com.qusai.nook`), so it never shares data with an official Nook.
 
 ## Daily use
@@ -24,6 +35,7 @@ small, clearly marked changes, so official releases merge cleanly.
 | Only check whether a newer official release exists | `Fork/update.sh --check` |
 | Build and install the current code | `Fork/build.sh --install` |
 | Tab model tests | `cd Packages/NookTabsCore && swift test` |
+| Re-install the pinned WA-JS, or fetch a newer release to pin (when the WhatsApp copy pauses) | `Fork/update-wa-js.sh [tag]` |
 | Compare Arc's sidebar with this Nook's tabs, item by item | `Fork/verify-arc-import.py` |
 | Nook vs Arc memory/CPU benchmark | `Fork/bench/bench.py` (needs Settings > Developer > Browser Control on) |
 
