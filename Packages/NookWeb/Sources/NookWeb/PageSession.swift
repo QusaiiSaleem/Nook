@@ -50,8 +50,16 @@ public final class PageSession: NSObject, Identifiable {
 
     /// Last committed URL (or the URL being loaded when nothing has committed yet).
     public var url: URL
-    public var title: String
+    public var title: String {
+        // Sticky, so a favorite whose badge the person relies on stays loaded once read (IdleUnloadPolicy).
+        didSet { if !hasShownUnreadCount, UnreadCount.parse(title) != nil { hasShownUnreadCount = true } }
+    }
     public var favicon: SwiftUI.Image
+    /// Whether this page's title has shown an unread count since the session began.
+    @ObservationIgnored public internal(set) var hasShownUnreadCount = false
+    /// Whether the person typed into this page since it last loaded (`noteTyping`); unloading it
+    /// would lose that text.
+    @ObservationIgnored public internal(set) var hasTypedSinceLoad = false
     /// A page the ad blocker stopped from loading. The blocked-page card shows while it is set.
     public internal(set) var blockedURL: URL?
 

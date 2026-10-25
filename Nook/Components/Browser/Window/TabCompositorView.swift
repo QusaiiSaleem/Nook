@@ -9,9 +9,11 @@ import NookWeb
 // MARK: - Tab Compositor Manager
 
 /// Unloads pages no window shows: idle timeout, loaded-page budget, memory pressure and app
-/// backgrounding, per the tab management mode. Visible panes, audible media, picture-in-picture,
-/// capture, pinned tabs and favorites are exempt. A hidden page gives up its back/forward page
-/// cache first, pinned or not.
+/// backgrounding, per the tab management mode. `IdleUnloadPolicy` decides which: visible panes,
+/// audible media, picture-in-picture, capture and full screen are exempt, and so are favorites
+/// and pinned tabs that keep running for alerts, show unread counts, keep WhatsApp's local copy
+/// or hold typed text. App backgrounding never unloads favorites or pinned tabs. A hidden page
+/// gives up its back/forward page cache first, pinned or not.
 @MainActor
 class TabCompositorManager: ObservableObject {
     private static let log = Logger(
@@ -166,9 +168,6 @@ class TabCompositorManager: ObservableObject {
             return
         }
         session.clearPageCache()
-        // Pinned tabs and favorites are never unloaded automatically, so re-arming would only
-        // wake the app.
-        if isPinned(itemID) { return }
 
         let remaining = mode.unloadTimeout - idle
         if remaining > 1 {
@@ -192,21 +191,25 @@ class TabCompositorManager: ObservableObject {
         }
     }
 
-    /// Shared eligibility for automatic eviction and bulk hidden-page unloading. A user
-    /// unloading one page deliberately bypasses this policy.
+    /// Shared eligibility for automatic eviction and bulk hidden-page unloading (see
+    /// `IdleUnloadPolicy`). A user unloading one page deliberately bypasses this policy.
     func canUnloadInactive(_ session: PageSession) -> Bool {
-        guard let tabs, !session.isUnloaded, !tabs.isOnScreen(session.itemID) else { return false }
-        // A silent video nobody can see is not a reason to keep a page: news sites loop muted
-        // clips forever. Audible media and picture-in-picture are.
-        if session.hasPiPActive || session.hasPlayingAudio || session.hasAudioContent {
-            return false
-        }
+        guard let tabs, !session.isUnloaded else { return false }
         var views = browserManager?.webViewCoordinator?.getAllWebViews(for: session.itemID) ?? []
         if let primary = session.webView { views.append(primary) }
-        if views.contains(where: { $0.cameraCaptureState != .none || $0.microphoneCaptureState != .none }) {
-            return false
-        }
-        return !isPinned(session.itemID)
+        let spaceID = tabs.spaceID(of: session.itemID)
+        return IdleUnloadPolicy.mayUnload(
+            onScreen: tabs.isOnScreen(session.itemID),
+            audible: session.hasPlayingAudio || session.hasAudioContent,
+            pictureInPicture: session.hasPiPActive,
+            capturing: views.contains { $0.cameraCaptureState != .none || $0.microphoneCaptureState != .none },
+            inFullScreen: views.contains { $0.fullscreenState != .notInFullscreen },
+            keepsRunningForAlerts: tabs.keepsRunningOffscreen(session.itemID),
+            isFavoriteOrPinned: isPinned(session.itemID),
+            hasShownUnreadCount: session.hasShownUnreadCount,
+            keepsLocalCopy: session.url.host?.lowercased() == MessageArchivePolicy.host
+                && spaceID.map { browserManager?.messageArchiveManager.isEnabled(spaceID: $0) == true } == true,
+            hasTypedSinceLoad: session.hasTypedSinceLoad)
     }
 
     /// Higher keeps the page longer.
@@ -294,7 +297,9 @@ class TabCompositorManager: ObservableObject {
 
     private func handleAppDidResignActive() {
         guard mode.unloadsOnBackground, let sessions = tabs?.sessions else { return }
-        sessions.filter(canUnloadInactive).forEach { evict($0, reason: .background) }
+        // Favorites and pinned tabs would reload on every return to Nook; the idle timer and the
+        // loaded-page budget still cover them.
+        sessions.filter { canUnloadInactive($0) && !isPinned($0.itemID) }.forEach { evict($0, reason: .background) }
     }
 
     // MARK: - Loaded Page Budget
@@ -304,7 +309,7 @@ class TabCompositorManager: ObservableObject {
         budgetRetryTimer = nil
         guard let maxTabs = mode.maxLoadedTabs, let sessions = tabs?.sessions else { return }
 
-        // canUnloadInactive already leaves pinned tabs and favorites out of the count.
+        // canUnloadInactive already leaves pages kept running for alerts out of the count.
         let loaded = sessions.filter(canUnloadInactive)
         // Logged either way: silence here would be ambiguous between a cap that never binds and
         // code that never runs, which is exactly what made an earlier measurement useless.
