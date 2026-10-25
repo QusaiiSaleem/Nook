@@ -23,6 +23,34 @@ struct RowsTests {
         #expect(open.map(\.section) == [.pinned, .pinned, .pinned, .pinned, .tabs])
     }
 
+    @Test func closedFolderKeepsItsOpenTabsVisible() throws {
+        var f = Fixture()
+        let pinned = Parent.pinned(spaceID: f.spaceA)
+        let dev = f.folder("Dev", in: pinned)
+        let asleep = f.tab("asleep", in: .folder(itemID: dev))
+        let runpod = f.tab("runpod", in: .folder(itemID: dev))
+        let ai = f.folder("AI", in: .folder(itemID: dev))
+        let claude = f.tab("claude", in: .folder(itemID: ai))
+        let left = f.tab("left", in: .folder(itemID: dev)), right = f.tab("right", in: .folder(itemID: dev))
+        let split = UUID()
+        try f.tree.makeSplit(id: split, left: left, right: right, in: .folder(itemID: dev), after: ai, info: SplitInfo(fraction: 0.5, focusRight: false), now: fixedNow)
+        let p1 = f.tab("p1", in: pinned)
+        let open: Set<UUID> = [runpod, claude, right]
+
+        // Dev closed: its open tabs show one level in, from sub-folders too; a split shows as its one row.
+        let closed = f.tree.visibleRows(space: f.spaceA, openFolders: [], keepVisible: open)
+        #expect(closed.map(\.item.id) == [dev, runpod, claude, split, p1])
+        #expect(closed.map(\.depth) == [0, 1, 1, 1, 0])
+
+        // Dev open, AI closed: AI's open tab shows under AI.
+        let devOpen = f.tree.visibleRows(space: f.spaceA, openFolders: [dev], keepVisible: open)
+        #expect(devOpen.map(\.item.id) == [dev, asleep, runpod, ai, claude, split, p1])
+        #expect(devOpen.map(\.depth) == [0, 1, 1, 1, 2, 1, 0])
+
+        // Nothing open: a closed folder hides everything, as before.
+        #expect(f.tree.visibleRows(space: f.spaceA, openFolders: []).map(\.item.id) == [dev, p1])
+    }
+
     @Test func dropTargetResolvesParentAndNeighbor() {
         var f = Fixture()
         let tabs = Parent.tabs(spaceID: f.spaceA)

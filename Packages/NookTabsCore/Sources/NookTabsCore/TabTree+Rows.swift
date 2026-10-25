@@ -3,8 +3,9 @@ import Foundation
 
 extension TabTree {
     /// Sidebar rows for one space: the pinned section, then the tabs section. The children of a
-    /// folder or a parent tab appear only while it is open.
-    public func visibleRows(space spaceID: UUID, openFolders: Set<UUID>) -> [Row] {
+    /// folder or a parent tab appear only while it is open, except that a closed folder still
+    /// shows the `keepVisible` tabs anywhere inside it, one level in, as Arc shows open tabs.
+    public func visibleRows(space spaceID: UUID, openFolders: Set<UUID>, keepVisible: Set<UUID> = []) -> [Row] {
         let groups = childrenByParent()
         var rows: [Row] = []
         func walk(_ parent: Parent, depth: Int, section: SidebarSection) {
@@ -12,8 +13,25 @@ extension TabTree {
                 let hasChildren = !child.isFolder && groups[.folder(itemID: child.id)] != nil
                 rows.append(Row(item: child, depth: depth, section: section, hasChildren: hasChildren))
                 // A split is one row; its two tabs are drawn inside it.
-                if (child.isFolder && !child.isSplit) || hasChildren, openFolders.contains(child.id) {
+                guard (child.isFolder && !child.isSplit) || hasChildren else { continue }
+                if openFolders.contains(child.id) {
                     walk(.folder(itemID: child.id), depth: depth + 1, section: section)
+                } else if child.isFolder, !keepVisible.isEmpty {
+                    walkKept(.folder(itemID: child.id), depth: depth + 1, section: section)
+                }
+            }
+        }
+        // Inside a closed folder: only kept tabs, flattened; a split counts when either tab is kept.
+        func walkKept(_ parent: Parent, depth: Int, section: SidebarSection) {
+            for child in groups[parent] ?? [] {
+                if child.isSplit {
+                    if groups[.folder(itemID: child.id)]?.contains(where: { keepVisible.contains($0.id) }) == true {
+                        rows.append(Row(item: child, depth: depth, section: section, hasChildren: false))
+                    }
+                } else if child.isFolder {
+                    walkKept(.folder(itemID: child.id), depth: depth, section: section)
+                } else if keepVisible.contains(child.id) {
+                    rows.append(Row(item: child, depth: depth, section: section, hasChildren: false))
                 }
             }
         }

@@ -280,7 +280,7 @@ public final class TabsController {
 
     public func rows(space spaceID: UUID) -> [Row] {
         guard let owner = owner(ofSpace: spaceID) else { return [] }
-        return tree(owner).visibleRows(space: spaceID, openFolders: openFolders(owner))
+        return tree(owner).visibleRows(space: spaceID, openFolders: openFolders(owner), keepVisible: openTabs(owner))
     }
 
     public func section(of itemID: UUID) -> Parent? {
@@ -337,6 +337,15 @@ public final class TabsController {
         switch owner {
         case .main: return device.openFolders
         case .privateWindow: return privateOpenFolders
+        }
+    }
+
+    /// Tabs a closed folder still shows: open until the person closes them, asleep or not, and
+    /// across relaunches (`device.openPages`). A private window keeps only its live pages.
+    func openTabs(_ owner: Owner) -> Set<UUID> {
+        switch owner {
+        case .main: return Set(device.openPages.keys)
+        case .privateWindow(let window): return Set(window.privateSessions.keys)
         }
     }
 
